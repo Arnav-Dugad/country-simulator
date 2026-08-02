@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { PanelTarget } from '../game/types';
 import type { Preferences } from '../game/storage';
 import { readPreferences, writePreferences } from '../game/storage';
 
@@ -11,25 +12,11 @@ export interface Toast {
   body: string;
 }
 
-export type PanelId =
-  | 'dashboard'
-  | 'economy'
-  | 'budget'
-  | 'policies'
-  | 'decrees'
-  | 'research'
-  | 'construction'
-  | 'society'
-  | 'environment'
-  | 'military'
-  | 'diplomacy'
-  | 'intelligence'
-  | 'provinces'
-  | 'politics'
-  | 'cabinet'
-  | 'objectives'
-  | 'achievements'
-  | 'history';
+/**
+ * Panels the shell can show. Derived from the engine's `PanelTarget` so a
+ * recommendation can never point at a panel that does not exist.
+ */
+export type PanelId = PanelTarget;
 
 interface UiState {
   panel: PanelId;

@@ -14,6 +14,7 @@ import { useUiStore } from '../../store/uiStore';
 import { Badge, Button, Card, EmptyState, Meter, Modal, Reveal, Slider, Stat, Tabs, Tooltip, meterColor } from '../ui/primitives';
 import { Flag } from '../ui/Flag';
 import { ModifierList } from './ModifierList';
+import { WorldMap, type MapMode } from './WorldMap';
 import { chartTooltip } from './chartHelpers';
 
 /* ================================ Military ============================== */
@@ -227,7 +228,8 @@ export function DiplomacyPanel({ game }: { game: GameState }) {
   const store = useGameStore();
   const { selectedNation, selectNation } = useUiStore();
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'nations' | 'treaties' | 'orgs'>('nations');
+  const [tab, setTab] = useState<'map' | 'nations' | 'treaties' | 'orgs'>('map');
+  const [mapMode, setMapMode] = useState<MapMode>('relations');
   const symbol = game.identity.currency.symbol;
 
   const nations = useMemo(() => {
@@ -253,6 +255,7 @@ export function DiplomacyPanel({ game }: { game: GameState }) {
       <Reveal delay={0.04}>
         <Tabs
           tabs={[
+            { id: 'map' as const, label: 'World map' },
             { id: 'nations' as const, label: 'Nations', count: game.nations.length },
             { id: 'treaties' as const, label: 'Treaties', count: game.treaties.length },
             { id: 'orgs' as const, label: 'Organisations', count: game.orgs.length },
@@ -261,6 +264,27 @@ export function DiplomacyPanel({ game }: { game: GameState }) {
           onChange={setTab}
         />
       </Reveal>
+
+      {tab === 'map' && (
+        <Reveal delay={0.06}>
+          <Card
+            title="The world"
+            subtitle="Click any nation to open its file"
+            icon="🗺️"
+            padded={false}
+          >
+            <div className="p-4">
+              <WorldMap
+                game={game}
+                mode={mapMode}
+                onModeChange={setMapMode}
+                selectedId={selectedNation}
+                onSelect={selectNation}
+              />
+            </div>
+          </Card>
+        </Reveal>
+      )}
 
       {tab === 'nations' && (
         <>

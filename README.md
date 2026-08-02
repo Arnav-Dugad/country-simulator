@@ -83,7 +83,21 @@ one country can chase Superpower, then Carbon Negative, then Utopia in a single 
   development, loyalty, unrest and autonomy.
 - **Diplomacy** — 61 simulated nations with independent economies, personalities and
   memory; 6 treaty types, foreign aid, sanctions, embassies and 10 international
-  organisations with real accession requirements.
+  organisations with real accession requirements. An **interactive world map** colours
+  every nation by relations, trade volume or military strength, sizes markers by
+  economy, draws your live trade lanes, and opens a nation's file on click.
+- **Commodity trade** — Standing per-commodity agreements with named nations. A contract
+  locks its price for the whole term, taking that volume out of the spot market
+  entirely: protection when the market spikes, a cost when it falls. Longer locks are
+  priced worse, because that is what the certainty costs. Contracts are exposed to the
+  counterparty — war and sanctions suspend delivery without tearing up the agreement,
+  and it resumes if relations recover before the term expires. Walking away early costs
+  relations and trust.
+- **Cabinet advice** — Your ministers read the state every month and raise the two or
+  three things that most need attention, each naming the number behind it and offering a
+  concrete fix: *"We are borrowing 4.2% of monthly output with debt at 137% of GDP.
+  Raising income tax to 29% would close most of the gap."* Most come with a one-click
+  action, and a test asserts every action the board offers actually succeeds when taken.
 - **Military & intelligence** — Five branches, five doctrines, war with a live war
   score, casualties and peace negotiation; six covert operation types.
 - **Events** — 56 branching situations with 2–3 choices each. Risky options can
@@ -103,7 +117,7 @@ The engine is a pure function of `GameState`. `tick(state)` advances one month a
 touches nothing outside its argument — no React, no Firebase, no `Date.now()` in the
 maths. That is what makes the whole thing testable in plain Node.
 
-Four design decisions are worth calling out, because they were arrived at by
+Five design decisions are worth calling out, because they were arrived at by
 measurement rather than guesswork (see `scripts/`):
 
 **1. Growth is convergence toward a frontier, not a free-standing rate.**
@@ -133,6 +147,13 @@ United States alike — to the same military strength. Starting defence budgets 
 set from each country's real posture, capped so an over-militarised, low-revenue state
 does not begin with defence crowding out every civil department.
 
+**5. Difficulty has to change something the player can feel.**
+`crisisMultiplier` was displayed in the setup wizard and read by nothing — the game
+promised "Crises ×2.2" and ignored it. `economyMultiplier` was wired, but only to the
+convergence term, which is already near zero for a developed economy, so it barely
+touched the countries where it mattered. Difficulty now drives event frequency, the mix
+of severities, gamble odds, tax collection *and* the productivity frontier itself.
+
 Costs in the content files are written for a $1.5T economy and scaled by `costScale()`,
 so a stimulus package is the same share of GDP whether you run Fiji or the United States.
 
@@ -159,7 +180,7 @@ Other scripts:
 ```bash
 npm run build        # typecheck + production build to dist/
 npm run preview      # serve the production build
-npm test             # 96 tests: engine, data integrity and UI
+npm test             # 123 tests: engine, data integrity and UI
 npm run test:watch   # watch mode
 ```
 
@@ -170,6 +191,9 @@ node scripts/balance-probe.mjs        # hands-off campaigns across sample countr
 node scripts/competent-probe.mjs      # the same countries played sensibly
 node scripts/budget-probe.mjs usa     # budget composition over time
 node scripts/trajectory-probe.mjs usa # month-by-month index trajectory
+node scripts/difficulty-probe.mjs     # does the difficulty setting actually bite?
+node scripts/military-probe.mjs       # military calibration against real countries
+node scripts/content-count.mjs        # size of every content set
 ```
 
 **The game runs fine with no configuration at all.** Without Firebase it falls back to
@@ -237,23 +261,23 @@ Skip step 3 and the deployment still works — it just runs in offline mode.
 
 ## Testing and QA
 
-96 tests, all passing, in three suites:
+123 tests, all passing, in three suites:
 
-**`src/game/__tests__/data-integrity.test.ts`** (22) — ids are unique; every tech
+**`src/game/__tests__/data-integrity.test.ts`** (28) — ids are unique; every tech
 prerequisite resolves and sits at a lower tier; the tech tree has no cycles and is fully
 reachable; policy conflicts are declared symmetrically; every unlock, chain and
 requirement points at something real; every modifier key is one the engine implements;
 wonders are unique; zero-weight events are reachable through a chain.
 
-**`src/game/__tests__/simulation.test.ts`** (39) — a valid state for all 94 countries;
+**`src/game/__tests__/simulation.test.ts`** (51) — a valid state for all 94 countries;
 determinism for a given seed; 600-month runs across eight countries and all five
 difficulties asserting *every numeric leaf of the state stays finite* and every index
 stays in range; sector shares and party support always sum correctly; time cannot
 advance while an event is pending; the whole tech tree completes; every policy and
 building is reachable; taxes, bonds, treaties, orgs, covert ops and war all resolve.
 
-**`src/test/ui-smoke.test.tsx`** (35) — mounts the real React tree in jsdom: every one of
-the 18 panels against a mature campaign, a brand-new campaign and a custom nation; every
+**`src/test/ui-smoke.test.tsx`** (44) — mounts the real React tree in jsdom: every one of
+the 19 panels against a mature campaign, a brand-new campaign and a custom nation; every
 one of the 56 events in the event modal; the victory and defeat screens; the full
 wizard flow end-to-end producing a config that actually creates a playable game; and all
 three standalone pages. Any React error logged during a render fails the test.
@@ -276,6 +300,8 @@ src/
       actions.ts          Every player action
       events.ts           Event selection and resolution
       scoring.ts          Score, victory conditions
+      advisory.ts         Cabinet recommendations read from the live state
+      trade.ts            Commodity agreements, pricing and capacity
       career.ts           Career statistics aggregated across campaigns
       treasury.ts         The single spend path (borrows rather than going negative)
       rng.ts              Deterministic, seeded RNG
@@ -285,7 +311,7 @@ src/
     ui/                   Design primitives, flags, backdrop, toasts
     layout/               Shell, top bar, navigation
     setup/                The setup wizard
-    panels/               The 18 game panels
+    panels/               The 19 game panels
     game/                 Event modal, game-over screen
   pages/                  Landing, auth, setup, game, leaderboard
 scripts/                  Balance probes

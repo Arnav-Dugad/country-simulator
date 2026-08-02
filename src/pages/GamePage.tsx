@@ -11,6 +11,7 @@ import { Dashboard } from '../components/panels/Dashboard';
 import { BudgetPanel, EconomyPanel } from '../components/panels/EconomyPanels';
 import { CabinetPanel, PoliciesPanel, PoliticsPanel, ProvincesPanel } from '../components/panels/GovernancePanels';
 import { DecreesPanel } from '../components/panels/DecreesPanel';
+import { TradePanel } from '../components/panels/TradePanel';
 import { ConstructionPanel, ResearchPanel } from '../components/panels/ProgressPanels';
 import { EnvironmentPanel, SocietyPanel } from '../components/panels/SocietyPanels';
 import { DiplomacyPanel, IntelligencePanel, MilitaryPanel } from '../components/panels/PowerPanels';
@@ -55,6 +56,7 @@ function PanelHost({ game, panel }: { game: GameState; panel: ReturnType<typeof 
     case 'environment': return <EnvironmentPanel game={game} />;
     case 'military': return <MilitaryPanel game={game} />;
     case 'diplomacy': return <DiplomacyPanel game={game} />;
+    case 'trade': return <TradePanel game={game} />;
     case 'intelligence': return <IntelligencePanel game={game} />;
     case 'achievements': return <AchievementsPanel game={game} />;
     case 'history': return <HistoryPanel game={game} />;

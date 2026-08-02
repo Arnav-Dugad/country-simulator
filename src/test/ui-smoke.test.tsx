@@ -24,7 +24,14 @@ import { Dashboard } from '../components/panels/Dashboard';
 import { BudgetPanel, EconomyPanel } from '../components/panels/EconomyPanels';
 import { CabinetPanel, PoliciesPanel, PoliticsPanel, ProvincesPanel } from '../components/panels/GovernancePanels';
 import { DecreesPanel } from '../components/panels/DecreesPanel';
+import { TradePanel } from '../components/panels/TradePanel';
+import { AdvisoryBoard } from '../components/panels/AdvisoryBoard';
+import { WorldMap } from '../components/panels/WorldMap';
 import { ProfilePage } from '../pages/ProfilePage';
+import { allRecommendations } from '../game/engine/advisory';
+import { setTax } from '../game/engine/actions';
+import { computeBudget } from '../game/selectors';
+import { COUNTRY_COORDS } from '../game/data/geography';
 import { ConstructionPanel, ResearchPanel } from '../components/panels/ProgressPanels';
 import { EnvironmentPanel, SocietyPanel } from '../components/panels/SocietyPanels';
 import { DiplomacyPanel, IntelligencePanel, MilitaryPanel } from '../components/panels/PowerPanels';
@@ -119,6 +126,7 @@ const PANELS: { id: PanelId; label: string; Component: (props: { game: GameState
   { id: 'budget', label: 'Treasury', Component: BudgetPanel },
   { id: 'policies', label: 'Policies', Component: PoliciesPanel },
   { id: 'decrees', label: 'Executive Actions', Component: DecreesPanel },
+  { id: 'trade', label: 'Trade', Component: TradePanel },
   { id: 'politics', label: 'Politics', Component: PoliticsPanel },
   { id: 'cabinet', label: 'Cabinet', Component: CabinetPanel },
   { id: 'provinces', label: 'Provinces', Component: ProvincesPanel },
@@ -454,6 +462,197 @@ describe('pages', () => {
     expect(await screen.findByText(/Reduce motion/i)).toBeTruthy();
 
     expectNoReactErrors('profile page with career');
+  });
+});
+
+describe('advisory board', () => {
+  it('renders the cabinet’s advice and runs a one-click action', async () => {
+    const user = userEvent.setup();
+    const game = createGame(setupFor('germany'), 8001);
+    // Guarantee at least one actionable recommendation: no research running.
+    game.research.current = null;
+    game.economy.treasury = 1e9;
+    useGameStore.setState({ game, playing: false });
+
+    const advice = allRecommendations(game);
+    const actionable = advice.find((r) => r.action);
+    expect(actionable, 'the fixture should produce an actionable recommendation').toBeDefined();
+
+    render(<AdvisoryBoard game={game} limit={5} />);
+    expect(screen.getByText(actionable!.headline)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: actionable!.action!.label }));
+
+    // The action ran against the store, not just the local component.
+    const updated = useGameStore.getState().game!;
+    expect(JSON.stringify(updated)).not.toBe(JSON.stringify(game));
+    expectNoReactErrors('advisory board');
+  });
+
+  it('says so plainly when there is nothing to raise', () => {
+    const game = createGame(setupFor('norway'), 8002);
+    // A country with nothing wrong on any axis the board inspects.
+    game.approval = 85;
+    game.stability = 90;
+    game.corruption = 5;
+    game.economy.inflation = 2;
+    game.economy.unemployment = 3;
+    game.economy.growth = 3;
+    game.economy.debt = 0;
+    game.economy.treasury = 0;
+    game.advisors = ['adv-finance', 'adv-growth', 'adv-defence', 'adv-foreign', 'adv-science'];
+    game.research.current = 'modern-banking';
+    game.orgs = ['un', 'wto', 'nato', 'g20'];
+    game.energy.demand = 50;
+    game.energy.production.hydro = 200;
+    game.environment.emissions = 20;
+    for (const n of game.nations) n.relations = 40;
+    // Self-sufficient in every commodity, so nothing is short.
+    for (const holding of Object.values(game.resources)) {
+      holding.production = holding.consumption + 1;
+    }
+    // And a budget close enough to balance that neither the deficit nor the
+    // surplus advice fires.
+    const gdpMonthly = (game.economy.gdp * 1000) / 12;
+    for (let i = 0; i < 40; i++) {
+      const net = computeBudget(game).net / gdpMonthly;
+      if (Math.abs(net) < 0.02) break;
+      setTax(game, 'income', game.taxes.income + (net < 0 ? 1 : -1));
+    }
+
+    const remaining = allRecommendations(game);
+    expect(remaining.map((r) => r.id), 'the fixture should give the cabinet nothing to raise').toEqual([]);
+
+    render(<AdvisoryBoard game={game} limit={3} />);
+    expect(screen.getByText(/Nothing pressing/i)).toBeTruthy();
+    expectNoReactErrors('quiet advisory board');
+  });
+});
+
+describe('world map', () => {
+  it('renders a marker for every placed nation and reports a click', async () => {
+    const user = userEvent.setup();
+    const game = matureGame();
+    const onSelect = vi.fn();
+
+    const { container } = render(<WorldMap game={game} onSelect={onSelect} />);
+
+    const placed = game.nations.filter((n) => COUNTRY_COORDS[n.id]);
+    expect(placed.length, 'most nations should be placed').toBeGreaterThan(30);
+
+    const markers = container.querySelectorAll('g[role="button"]');
+    expect(markers.length).toBe(placed.length);
+
+    await user.click(markers[0]);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(placed.some((n) => n.id === onSelect.mock.calls[0][0])).toBe(true);
+
+    expectNoReactErrors('world map');
+  });
+
+  it('keeps every marker inside the map bounds', () => {
+    const game = matureGame();
+    const { container } = render(<WorldMap game={game} onSelect={vi.fn()} />);
+
+    const svg = container.querySelector('svg')!;
+    const [, , width, height] = svg.getAttribute('viewBox')!.split(' ').map(Number);
+
+    for (const marker of svg.querySelectorAll('g[role="button"] circle')) {
+      const cx = Number(marker.getAttribute('cx'));
+      const cy = Number(marker.getAttribute('cy'));
+      expect(Number.isFinite(cx) && Number.isFinite(cy), 'marker coordinates must be finite').toBe(true);
+      expect(cx).toBeGreaterThanOrEqual(0);
+      expect(cx).toBeLessThanOrEqual(width);
+      expect(cy).toBeGreaterThanOrEqual(0);
+      expect(cy).toBeLessThanOrEqual(height);
+    }
+  });
+
+  it('switches colouring mode', async () => {
+    const user = userEvent.setup();
+    const game = matureGame();
+    const onModeChange = vi.fn();
+
+    render(<WorldMap game={game} onSelect={vi.fn()} mode="relations" onModeChange={onModeChange} />);
+    await user.click(screen.getByRole('button', { name: /Military strength/i }));
+    expect(onModeChange).toHaveBeenCalledWith('power');
+    expectNoReactErrors('map mode switch');
+  });
+
+  it('renders for a custom nation with no real country behind it', () => {
+    const custom = createGame(
+      {
+        ...defaultSetup(),
+        mode: 'custom',
+        countryId: null,
+        nationName: 'Aurelia',
+        capital: 'Solmara',
+        leaderName: 'Vale Rhen',
+        traits: ['visionary'],
+        region: 'oceania',
+      },
+      8003,
+    );
+    const { container } = render(<WorldMap game={custom} onSelect={vi.fn()} />);
+    expect(container.querySelector('svg')).toBeTruthy();
+    expectNoReactErrors('custom nation map');
+  });
+});
+
+describe('trade panel', () => {
+  it('opens a negotiation and signs an agreement', async () => {
+    const user = userEvent.setup();
+    const game = createGame(setupFor('japan'), 8004);
+    // Make every partner willing, so the acceptance roll cannot flake.
+    for (const n of game.nations) {
+      n.relations = 90;
+      n.trust = 100;
+    }
+    useGameStore.setState({ game, playing: false });
+
+    render(<TradePanel game={game} />);
+
+    // Japan is short of oil, so the import button is the primary action.
+    const importButtons = screen.getAllByRole('button', { name: /^Import$/i });
+    expect(importButtons.length).toBeGreaterThan(0);
+    await user.click(importButtons[0]);
+
+    // The negotiation modal lists suppliers.
+    expect(await screen.findByText(/Choose a supplier/i)).toBeTruthy();
+
+    const propose = await screen.findByRole('button', { name: /Propose to/i });
+    // Retry the acceptance roll a few times; refusal is a legitimate outcome.
+    for (let i = 0; i < 15 && useGameStore.getState().game!.tradeAgreements.length === 0; i++) {
+      await user.click(propose);
+    }
+    expect(
+      useGameStore.getState().game!.tradeAgreements.length,
+      'a maximally friendly partner should sign within fifteen attempts',
+    ).toBeGreaterThan(0);
+
+    expectNoReactErrors('trade negotiation');
+  });
+
+  it('shows live agreements and their price advantage', () => {
+    const game = matureGame();
+    const partner = game.nations.find((n) => (n.resources.oil ?? 0) > 60)!;
+    game.tradeAgreements = [
+      {
+        id: 'ta1', countryId: partner.id, resource: 'oil', direction: 'import',
+        quantity: 4, lockedPrice: 0.8, signedTurn: 10, termMonths: 120, suspended: false,
+      },
+      {
+        id: 'ta2', countryId: game.nations[1].id, resource: 'grain', direction: 'export',
+        quantity: 2, lockedPrice: 1.4, signedTurn: 20, termMonths: 60, suspended: true,
+      },
+    ];
+
+    const { container } = render(<TradePanel game={game} />);
+    // The balance tab shows the contracted flow on both commodities.
+    expect(container.textContent).toMatch(/contracted/i);
+    // One live agreement, one suspended, so the header counts must reflect it.
+    expect(screen.getByText(/Suspended/)).toBeTruthy();
+    expectNoReactErrors('trade agreements');
   });
 });
 

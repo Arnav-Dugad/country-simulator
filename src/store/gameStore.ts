@@ -5,6 +5,7 @@ import type {
   GameState,
   MilitaryState,
   OrgId,
+  ResourceId,
   SetupConfig,
   TaxKey,
   TreatyType,
@@ -15,6 +16,7 @@ import { createGame } from '../game/engine/createGame';
 import { VICTORY_INDEX } from '../game/data/definitions';
 import { tick } from '../game/engine/tick';
 import { resolveEvent } from '../game/engine/events';
+import type { TradeTerm } from '../game/engine/trade';
 import type { ActionResult } from '../game/engine/actions';
 import * as actions from '../game/engine/actions';
 import { clearAutosave, isPlayableSave, saveGameLocally, writeAutosave } from '../game/storage';
@@ -78,6 +80,14 @@ interface GameStore {
   grantAutonomy: (provinceId: string) => ActionResult;
   setVictoryGoal: (goal: VictoryGoalId) => ActionResult;
   enactDecree: (decreeId: string) => ActionResult;
+  proposeTradeAgreement: (
+    countryId: string,
+    resource: ResourceId,
+    direction: 'import' | 'export',
+    quantity: number,
+    termMonths: TradeTerm,
+  ) => ActionResult;
+  cancelTradeAgreement: (agreementId: string) => ActionResult;
 
   saveToCloud: (uid: string) => Promise<void>;
   publishScore: (uid: string, displayName: string) => Promise<void>;
@@ -272,6 +282,9 @@ export const useGameStore = create<GameStore>((set, get) => {
     grantAutonomy: (provinceId) => get().run((s) => actions.grantAutonomy(s, provinceId)),
     setVictoryGoal: (goal) => get().run((s) => actions.setVictoryGoal(s, goal)),
     enactDecree: (decreeId) => get().run((s) => actions.enactDecree(s, decreeId)),
+    proposeTradeAgreement: (countryId, resource, direction, quantity, termMonths) =>
+      get().run((s) => actions.proposeTradeAgreement(s, countryId, resource, direction, quantity, termMonths)),
+    cancelTradeAgreement: (agreementId) => get().run((s) => actions.cancelTradeAgreement(s, agreementId)),
 
     saveToCloud: async (uid) => {
       const game = get().game;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { COUNTRIES } from '../data/countries';
+import { COUNTRIES, REGION_IDS } from '../data/countries';
+import { COUNTRY_COORDS, REGION_CENTROIDS, project } from '../data/geography';
+import { LANDMASSES } from '../data/landmasses';
 import { CURRENCIES } from '../data/currencies';
 import { POLICIES, POLICY_INDEX } from '../data/policies';
 import { TECHNOLOGIES, TECH_INDEX } from '../data/technologies';
@@ -276,6 +278,72 @@ describe('executive actions', () => {
     for (const d of DECREES) {
       for (const t of d.requires?.tech ?? []) {
         expect(TECH_INDEX[t], `${d.id} requires unknown tech ${t}`).toBeDefined();
+      }
+    }
+  });
+});
+
+describe('geography', () => {
+  it('places every playable country on the map', () => {
+    for (const c of COUNTRIES) {
+      const coords = COUNTRY_COORDS[c.id];
+      expect(coords, `${c.name} has no map coordinates`).toBeDefined();
+      expect(coords.lat, `${c.name} latitude`).toBeGreaterThanOrEqual(-90);
+      expect(coords.lat, `${c.name} latitude`).toBeLessThanOrEqual(90);
+      expect(coords.lon, `${c.name} longitude`).toBeGreaterThanOrEqual(-180);
+      expect(coords.lon, `${c.name} longitude`).toBeLessThanOrEqual(180);
+    }
+  });
+
+  it('has no coordinates for countries that do not exist', () => {
+    const ids = new Set(COUNTRIES.map((c) => c.id));
+    for (const id of Object.keys(COUNTRY_COORDS)) {
+      expect(ids.has(id), `${id} has coordinates but is not a playable country`).toBe(true);
+    }
+  });
+
+  it('puts each country roughly in the hemisphere its region implies', () => {
+    // A crude sanity check that catches a transposed or sign-flipped pair.
+    const expectations: Partial<Record<string, (c: { lat: number; lon: number }) => boolean>> = {
+      europe: (c) => c.lat > 30 && c.lon > -30 && c.lon < 70,
+      africa: (c) => c.lat > -40 && c.lat < 40 && c.lon > -20 && c.lon < 55,
+      'south-america': (c) => c.lat < 15 && c.lon < -30,
+      'north-america': (c) => c.lat > 5 && c.lon < -50,
+      oceania: (c) => c.lat < 5,
+      'east-asia': (c) => c.lon > 95,
+      'south-asia': (c) => c.lon > 60 && c.lon < 100,
+    };
+    for (const c of COUNTRIES) {
+      const check = expectations[c.region];
+      if (!check) continue;
+      expect(check(COUNTRY_COORDS[c.id]), `${c.name} looks misplaced for ${c.region}`).toBe(true);
+    }
+  });
+
+  it('places every region centroid', () => {
+    for (const region of REGION_IDS) {
+      expect(REGION_CENTROIDS[region], `${region} has no centroid`).toBeDefined();
+    }
+  });
+
+  it('projects into the unit square', () => {
+    for (const [lat, lon] of [[0, 0], [90, 180], [-90, -180], [45, -73], [-33, 151]] as const) {
+      const p = project(lat, lon);
+      expect(p.x).toBeGreaterThanOrEqual(0);
+      expect(p.x).toBeLessThanOrEqual(1);
+      expect(p.y).toBeGreaterThanOrEqual(0);
+      expect(p.y).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('draws closed landmass rings with plausible coordinates', () => {
+    for (const mass of LANDMASSES) {
+      expect(mass.ring.length, `${mass.id} needs enough points to be a shape`).toBeGreaterThan(5);
+      for (const [lon, lat] of mass.ring) {
+        expect(lon, `${mass.id} longitude`).toBeGreaterThanOrEqual(-180);
+        expect(lon, `${mass.id} longitude`).toBeLessThanOrEqual(180);
+        expect(lat, `${mass.id} latitude`).toBeGreaterThanOrEqual(-90);
+        expect(lat, `${mass.id} latitude`).toBeLessThanOrEqual(90);
       }
     }
   });

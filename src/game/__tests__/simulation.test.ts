@@ -10,6 +10,14 @@ import { POLICIES } from '../data/policies';
 import { TECHNOLOGIES } from '../data/technologies';
 import { BUILDINGS } from '../data/buildings';
 import { DECREES, DECREE_INDEX } from '../data/decrees';
+import { ADVISORS, ADVISOR_INDEX, ORG_INDEX } from '../data/institutions';
+import { RESOURCE_IDS } from '../data/definitions';
+import { BUILDING_INDEX } from '../data/buildings';
+import { POLICY_INDEX } from '../data/policies';
+import { TECH_INDEX } from '../data/technologies';
+import { allRecommendations } from '../engine/advisory';
+import { availableQuantity, quotedPrice, tradeEligibility } from '../engine/trade';
+import { agreementFlow, tradeAgreementBalance } from '../selectors';
 import {
   computeBudget,
   gdpPerCapita,
@@ -28,9 +36,12 @@ import {
   issueBonds,
   joinOrg,
   launchCovertOp,
+  cancelTradeAgreement,
   policyAvailability,
+  proposeTradeAgreement,
   proposeTreaty,
   repayDebt,
+  toggleSanctions,
   setBudget,
   setTax,
   setVictoryGoal,
@@ -467,6 +478,277 @@ describe('executive actions', () => {
     }
     assertInvariants(s, 'india/decree-spam');
     expect(s.turn).toBe(600);
+  });
+});
+
+describe('advisory board', () => {
+  it('never invents a panel, an action or an advisor that does not exist', () => {
+    const panels = new Set<string>([
+      'dashboard', 'economy', 'budget', 'policies', 'decrees', 'research', 'construction',
+      'society', 'environment', 'military', 'diplomacy', 'trade', 'intelligence',
+      'provinces', 'politics', 'cabinet', 'objectives', 'achievements', 'history',
+    ]);
+
+    // Sweep a wide spread of states so most advice branches actually fire.
+    const states: GameState[] = [];
+    for (const id of ['usa', 'fiji', 'drc', 'venezuela', 'norway', 'china']) {
+      const fresh = createGame(setupFor(id), 31);
+      states.push(fresh);
+
+      const advanced = createGame(setupFor(id), 32);
+      for (let i = 0; i < 180; i++) { autoResolve(advanced); tick(advanced); }
+      states.push(advanced);
+
+      const broken = createGame(setupFor(id, { difficulty: 'brutal', neverEndGame: true }), 33);
+      for (const key of Object.keys(broken.taxes) as (keyof typeof broken.taxes)[]) setTax(broken, key, 0);
+      for (let i = 0; i < 120; i++) { autoResolve(broken); tick(broken); }
+      states.push(broken);
+
+      const rich = createGame(setupFor(id, { neverEndGame: true }), 34);
+      rich.economy.treasury = 1e9;
+      rich.research.completed = TECHNOLOGIES.map((t) => t.id);
+      states.push(rich);
+    }
+
+    let seen = 0;
+    for (const s of states) {
+      for (const rec of allRecommendations(s)) {
+        seen++;
+        expect(panels.has(rec.panel), `unknown panel "${rec.panel}" from ${rec.id}`).toBe(true);
+        expect(rec.headline.length, `${rec.id} needs a headline`).toBeGreaterThan(8);
+        expect(rec.detail.length, `${rec.id} needs real detail`).toBeGreaterThan(30);
+        expect(Number.isFinite(rec.urgency), `${rec.id} urgency`).toBe(true);
+        // No unrendered placeholders leaking into player-facing text.
+        expect(rec.headline).not.toMatch(/NaN|undefined|Infinity/);
+        expect(rec.detail).not.toMatch(/NaN|undefined|Infinity/);
+
+        if (rec.advisorId) {
+          expect(ADVISOR_INDEX[rec.advisorId], `${rec.id} names unknown advisor`).toBeDefined();
+        }
+
+        const action = rec.action;
+        if (!action) continue;
+        expect(action.label.length).toBeGreaterThan(3);
+        switch (action.kind) {
+          case 'policy': expect(POLICY_INDEX[action.id], `${rec.id} -> policy ${action.id}`).toBeDefined(); break;
+          case 'decree': expect(DECREE_INDEX[action.id], `${rec.id} -> decree ${action.id}`).toBeDefined(); break;
+          case 'research': expect(TECH_INDEX[action.id], `${rec.id} -> tech ${action.id}`).toBeDefined(); break;
+          case 'build': expect(BUILDING_INDEX[action.id], `${rec.id} -> building ${action.id}`).toBeDefined(); break;
+          case 'org': expect(ORG_INDEX[action.id as never], `${rec.id} -> org ${action.id}`).toBeDefined(); break;
+          case 'budget': expect(s.budget[action.dept], `${rec.id} -> dept ${action.dept}`).toBeDefined(); break;
+          case 'tax': expect(s.taxes[action.key], `${rec.id} -> tax ${action.key}`).toBeDefined(); break;
+        }
+      }
+    }
+    expect(seen, 'the sweep should produce plenty of advice').toBeGreaterThan(40);
+  });
+
+  it('every suggested action actually succeeds when taken', () => {
+    // The point of a one-click fix is that it works. Anything the board offers
+    // must pass its own availability check at the moment it is offered.
+    const s = createGame(setupFor('brazil'), 41);
+    s.economy.treasury = 1e9;
+
+    for (let round = 0; round < 40; round++) {
+      for (const rec of allRecommendations(s)) {
+        const action = rec.action;
+        if (!action) continue;
+        let result: { ok: boolean; message: string } | null = null;
+        switch (action.kind) {
+          case 'policy': result = enactPolicy(s, action.id); break;
+          case 'decree': result = enactDecree(s, action.id); break;
+          case 'research': result = startResearch(s, action.id); break;
+          case 'build': result = startConstruction(s, action.id); break;
+          case 'org': result = joinOrg(s, action.id as never); break;
+          case 'budget': result = setBudget(s, action.dept, action.level); break;
+          case 'tax': result = setTax(s, action.key, action.value); break;
+        }
+        expect(result?.ok, `${rec.id} suggested "${action.label}" but it failed: ${result?.message}`).toBe(true);
+      }
+      autoResolve(s);
+      tick(s);
+      s.economy.treasury = 1e9;
+    }
+    assertInvariants(s, 'brazil/advisory-actions');
+  });
+
+  it('raises the alarm when something is badly wrong', () => {
+    const s = createGame(setupFor('germany'), 42);
+    s.energy.demand = 1000;
+    for (const key of Object.keys(s.energy.production) as (keyof typeof s.energy.production)[]) {
+      s.energy.production[key] = 10;
+    }
+    const advice = allRecommendations(s);
+    expect(advice.some((r) => r.id === 'energy-gap'), 'a grid shortfall must be raised').toBe(true);
+    expect(advice.find((r) => r.id === 'energy-gap')?.severity).toBe('critical');
+  });
+
+  it('stays quiet when a country is running well', () => {
+    const s = createGame(setupFor('norway'), 43);
+    s.approval = 80;
+    s.stability = 85;
+    s.corruption = 8;
+    s.economy.inflation = 2;
+    s.economy.unemployment = 3;
+    s.economy.growth = 3;
+    s.economy.debt = 0;
+    s.advisors = ADVISORS.slice(0, 5).map((a) => a.id);
+    s.research.current = 'modern-banking';
+    s.energy.demand = 100;
+    s.energy.production.hydro = 200;
+
+    const critical = allRecommendations(s).filter((r) => r.severity === 'critical');
+    expect(critical, `a well-run country should have no emergencies: ${critical.map((c) => c.id).join(', ')}`)
+      .toHaveLength(0);
+  });
+});
+
+describe('commodity trade', () => {
+  it('signs an agreement and settles it through the budget', () => {
+    const s = createGame(setupFor('japan'), 51);
+    // Japan has almost no oil, so an import contract is the natural case.
+    const supplier = s.nations.find((n) => (n.resources.oil ?? 0) > 70 && n.relations > -20);
+    expect(supplier, 'a plausible oil supplier should exist').toBeDefined();
+    supplier!.relations = 70;
+    supplier!.trust = 90;
+
+    const available = availableQuantity(s, supplier!, 'oil', 'import');
+    expect(available).toBeGreaterThan(0);
+
+    let signed = false;
+    for (let i = 0; i < 25 && !signed; i++) {
+      signed = proposeTradeAgreement(s, supplier!.id, 'oil', 'import', available * 0.5, 60).ok;
+    }
+    expect(signed, 'a warm, trusting partner should eventually agree').toBe(true);
+
+    const agreement = s.tradeAgreements[0];
+    expect(agreement.resource).toBe('oil');
+    expect(agreement.direction).toBe('import');
+    expect(agreement.lockedPrice).toBeGreaterThan(0);
+
+    // Contracted imports raise effective supply and cost money.
+    expect(agreementFlow(s, 'oil')).toBeCloseTo(agreement.quantity, 5);
+    expect(tradeAgreementBalance(s)).toBeLessThan(0);
+    assertInvariants(s, 'japan/oil-import');
+  });
+
+  it('refuses to sell a surplus that does not exist', () => {
+    const s = createGame(setupFor('japan'), 52);
+    // Pick a buyer with genuine appetite, and ask for less than they can take,
+    // so the rejection is specifically about Japan having no oil to sell.
+    const buyer = s.nations
+      .map((n) => ({ n, appetite: availableQuantity(s, n, 'oil', 'export') }))
+      .sort((a, b) => b.appetite - a.appetite)[0];
+    buyer.n.relations = 80;
+    expect(buyer.appetite, 'someone should want to buy oil').toBeGreaterThan(0.5);
+    expect(s.resources.oil.production, 'Japan produces almost no oil').toBeLessThan(1);
+
+    const result = proposeTradeAgreement(s, buyer.n.id, 'oil', 'export', 0.4, 24);
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/surplus|spare/i);
+  });
+
+  it('refuses partners at war or under sanctions', () => {
+    const s = createGame(setupFor('india'), 53);
+    const enemy = s.nations[0];
+    enemy.relations = 80;
+    enemy.atWarWithPlayer = true;
+    expect(tradeEligibility(s, enemy, 'oil', 'import', 1).ok).toBe(false);
+
+    const sanctioned = s.nations[1];
+    sanctioned.relations = 80;
+    sanctioned.sanctioned = true;
+    expect(tradeEligibility(s, sanctioned, 'oil', 'import', 1).ok).toBe(false);
+  });
+
+  it('suspends deliveries when a partner becomes unreachable, and resumes them', () => {
+    const s = createGame(setupFor('germany'), 54);
+    const partner = s.nations.find((n) => (n.resources.gas ?? 0) > 50)!;
+    partner.relations = 80;
+    partner.trust = 95;
+
+    let signed = false;
+    for (let i = 0; i < 25 && !signed; i++) {
+      signed = proposeTradeAgreement(s, partner.id, 'gas', 'import', 1, 120).ok;
+    }
+    expect(signed).toBe(true);
+
+    // Sanction them: the contract survives but stops delivering.
+    toggleSanctions(s, partner.id);
+    autoResolve(s);
+    tick(s);
+    expect(s.tradeAgreements[0].suspended, 'sanctions must suspend delivery').toBe(true);
+    expect(agreementFlow(s, 'gas'), 'a suspended contract moves nothing').toBe(0);
+    expect(tradeAgreementBalance(s), 'a suspended contract costs nothing').toBe(0);
+
+    // Lift them: it resumes rather than being torn up.
+    toggleSanctions(s, partner.id);
+    autoResolve(s);
+    tick(s);
+    expect(s.tradeAgreements[0].suspended).toBe(false);
+    expect(agreementFlow(s, 'gas')).toBeGreaterThan(0);
+  });
+
+  it('expires an agreement when its term runs out', () => {
+    const s = createGame(setupFor('france'), 55);
+    const partner = s.nations.find((n) => (n.resources.oil ?? 0) > 60)!;
+    partner.relations = 85;
+    partner.trust = 95;
+
+    let signed = false;
+    for (let i = 0; i < 25 && !signed; i++) {
+      signed = proposeTradeAgreement(s, partner.id, 'oil', 'import', 0.5, 24).ok;
+    }
+    expect(signed).toBe(true);
+
+    for (let i = 0; i < 25; i++) { autoResolve(s); tick(s); }
+    expect(s.tradeAgreements, 'the contract should have lapsed').toHaveLength(0);
+  });
+
+  it('costs relations to break a contract early', () => {
+    const s = createGame(setupFor('brazil'), 56);
+    const partner = s.nations.find((n) => (n.resources.oil ?? 0) > 60)!;
+    partner.relations = 80;
+    partner.trust = 95;
+
+    let signed = false;
+    for (let i = 0; i < 25 && !signed; i++) {
+      signed = proposeTradeAgreement(s, partner.id, 'oil', 'import', 0.5, 120).ok;
+    }
+    expect(signed).toBe(true);
+
+    const relationsAfterSigning = partner.relations;
+    cancelTradeAgreement(s, s.tradeAgreements[0].id);
+    expect(partner.relations).toBeLessThan(relationsAfterSigning);
+    expect(s.tradeAgreements).toHaveLength(0);
+  });
+
+  it('keeps the state sound with many agreements over fifty years', () => {
+    const s = createGame(setupFor('china', { neverEndGame: true }), 57);
+    for (const nation of s.nations) {
+      nation.relations = 70;
+      nation.trust = 90;
+    }
+
+    // Contract for everything anyone will sell.
+    for (const nation of s.nations.slice(0, 20)) {
+      for (const resource of RESOURCE_IDS) {
+        const available = availableQuantity(s, nation, resource, 'import');
+        if (available > 0.2) proposeTradeAgreement(s, nation.id, resource, 'import', available * 0.4, 120);
+      }
+    }
+    expect(s.tradeAgreements.length, 'many contracts should have been signed').toBeGreaterThan(5);
+
+    for (let i = 0; i < 600; i++) { autoResolve(s); tick(s); }
+    assertInvariants(s, 'china/heavy-trade');
+  });
+
+  it('prices a longer lock worse than a shorter one', () => {
+    const s = createGame(setupFor('india'), 58);
+    const partner = s.nations.find((n) => (n.resources.oil ?? 0) > 60)!;
+    const short = quotedPrice(s, partner, 'oil', 'import', 24);
+    const long = quotedPrice(s, partner, 'oil', 'import', 120);
+    expect(long, 'certainty costs a premium').toBeGreaterThan(short);
   });
 });
 

@@ -17,9 +17,13 @@ import { frontierPerCapita } from '../../game/engine/tick';
 import { Badge, Card, CountUp, Meter, Reveal, Stat, Tooltip, meterColor } from '../ui/primitives';
 import { useUiStore } from '../../store/uiStore';
 import { ChartFrame, chartAxis, chartTooltip } from './chartHelpers';
+import { AdvisoryBoard } from './AdvisoryBoard';
+import { WorldMap } from './WorldMap';
 
 export function Dashboard({ game }: { game: GameState }) {
   const setPanel = useUiStore((s) => s.setPanel);
+  const selectNation = useUiStore((s) => s.selectNation);
+  const showGuidance = useUiStore((s) => s.prefs.showTutorial);
   const budget = useMemo(() => computeBudget(game), [game]);
   const perCapita = gdpPerCapita(game);
   const frontier = useMemo(() => frontierPerCapita(game), [game]);
@@ -110,6 +114,12 @@ export function Dashboard({ game }: { game: GameState }) {
           />
         </div>
       </Reveal>
+
+      {showGuidance && (
+        <Reveal delay={0.04}>
+          <AdvisoryBoard game={game} limit={3} />
+        </Reveal>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-3">
         <Reveal delay={0.05} className="xl:col-span-2">
@@ -264,6 +274,33 @@ export function Dashboard({ game }: { game: GameState }) {
           </Card>
         </Reveal>
       </div>
+
+      <Reveal delay={0.19}>
+        <Card
+          title="The world"
+          subtitle="Your standing abroad. Click a nation to open its file."
+          icon="🗺️"
+          padded={false}
+          action={
+            <button
+              onClick={() => setPanel('diplomacy')}
+              className="focus-ring rounded-lg px-2 py-1 text-[11px] text-slate-400 transition hover:text-white"
+            >
+              Full map →
+            </button>
+          }
+        >
+          <div className="p-4">
+            <WorldMap
+              game={game}
+              onSelect={(id) => {
+                selectNation(id);
+                setPanel('diplomacy');
+              }}
+            />
+          </div>
+        </Card>
+      </Reveal>
 
       <Reveal delay={0.2}>
         <Card title="Recent dispatches" subtitle="The last thirty entries in the national record" icon="📜">

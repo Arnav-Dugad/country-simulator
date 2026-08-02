@@ -1,8 +1,10 @@
-import type { EnergySource, GameState, Modifiers, SectorId } from './types';
+import type { EnergySource, GameState, Modifiers, ResourceId, SectorId } from './types';
 import { BUILDING_INDEX } from './data/buildings';
 import { POLICY_INDEX } from './data/policies';
 import { TECH_INDEX } from './data/technologies';
-import { GOVERNMENT_INDEX, IDEOLOGY_INDEX, TRAIT_INDEX, ERA_INDEX } from './data/definitions';
+import {
+  DIFFICULTY_INDEX, ERA_INDEX, GOVERNMENT_INDEX, IDEOLOGY_INDEX, TRAIT_INDEX,
+} from './data/definitions';
 import { ADVISOR_INDEX, ORG_INDEX } from './data/institutions';
 
 /* ------------------------------------------------------------------ */
@@ -255,10 +257,15 @@ export function computeBudget(s: GameState): BudgetBreakdown {
   const gdpMonthly = (s.economy.gdp * 1000) / 12;
 
   // Corruption and administrative quality gate how much of the headline rate
-  // actually reaches the treasury.
+  // actually reaches the treasury — and so does difficulty, because a harder
+  // campaign should mean a harder state to run, not just noisier headlines.
+  const difficultyCollection = 0.75 + DIFFICULTY_INDEX[s.settings.difficulty].economyMultiplier * 0.25;
   const collection = clamp(
-    (1 + mods.taxEfficiency / 100) * (1 - s.corruption / 260) * (0.55 + s.stability / 220),
-    0.15,
+    (1 + mods.taxEfficiency / 100) *
+      (1 - s.corruption / 260) *
+      (0.55 + s.stability / 220) *
+      difficultyCollection,
+    0.12,
     1.5,
   );
 
@@ -350,15 +357,50 @@ export function computeBudget(s: GameState): BudgetBreakdown {
   };
 }
 
-/** Net monthly income from selling resource surpluses, millions USD. */
-export function resourceExportIncome(s: GameState): number {
-  let total = 0;
-  for (const [id, holding] of Object.entries(s.resources)) {
-    const key = id as keyof typeof s.worldPrices;
-    const surplus = holding.production - holding.consumption;
-    const price = s.worldPrices[key] ?? 1;
-    total += surplus * price * 0.85;
+/**
+ * Units a live agreement adds to (import) or removes from (export) the supply
+ * of one commodity each month.
+ */
+export function agreementFlow(s: GameState, resource: ResourceId): number {
+  let flow = 0;
+  for (const agreement of s.tradeAgreements) {
+    if (agreement.suspended || agreement.resource !== resource) continue;
+    flow += agreement.direction === 'import' ? agreement.quantity : -agreement.quantity;
   }
+  return flow;
+}
+
+/**
+ * Net monthly cash flow from contracted trade, in millions USD. Positive means
+ * the contracts earn; negative means they cost.
+ */
+export function tradeAgreementBalance(s: GameState): number {
+  let total = 0;
+  for (const agreement of s.tradeAgreements) {
+    if (agreement.suspended) continue;
+    const value = agreement.quantity * agreement.lockedPrice * 0.85;
+    total += agreement.direction === 'export' ? value : -value;
+  }
+  return total;
+}
+
+/**
+ * Net monthly income from commodities, millions USD.
+ *
+ * Contracts settle at the price locked when they were signed; only whatever is
+ * left over after them touches the spot market. That is the whole point of an
+ * agreement — it takes that volume out of the world price entirely.
+ */
+export function resourceExportIncome(s: GameState): number {
+  let total = tradeAgreementBalance(s);
+
+  for (const [id, holding] of Object.entries(s.resources)) {
+    const key = id as ResourceId;
+    // Contracted volume is already paid for above; the residual clears at spot.
+    const residual = holding.production + agreementFlow(s, key) - holding.consumption;
+    total += residual * (s.worldPrices[key] ?? 1) * 0.85;
+  }
+
   return total;
 }
 

@@ -17,6 +17,7 @@ import {
 } from '../selectors';
 import { computeScore, checkVictory, scoreTitle } from './scoring';
 import { rollEvent } from './events';
+import { updateTradeAgreements } from './trade';
 import { nextRandom, noise, randRange } from './rng';
 import { addTreasury } from './treasury';
 
@@ -148,10 +149,20 @@ export function frontierLog(s: GameState, mods: ReturnType<typeof totalModifiers
     (s.economy.creditRating - 70) * 0.0015 -
     (s.economy.inequality - 38) * 0.0012;
 
+  // Difficulty moves the ceiling itself, not just the speed of approach.
+  // Scaling convergence alone did almost nothing for a developed economy,
+  // because its convergence term is already near zero — which meant the
+  // difficulty setting barely touched the countries where it mattered most.
+  const difficultyShift = Math.log10(DIFFICULTY_INDEX[s.settings.difficulty].economyMultiplier) * 0.9;
+
   return clamp(
-    4.95 + s.research.completed.length * 0.013 + softCap(mods.gdpGrowth, 3) * 0.05 + institutions,
-    2.7,
-    5.7,
+    4.95 +
+      s.research.completed.length * 0.013 +
+      softCap(mods.gdpGrowth, 3) * 0.05 +
+      institutions +
+      difficultyShift,
+    2.4,
+    5.9,
   );
 }
 
@@ -756,6 +767,10 @@ function updateDiplomacy(s: GameState, mods: ReturnType<typeof totalModifiers>):
     const target = weightTotal > 0 ? gdpMonthly * openness * (weights[i] / weightTotal) : 0;
     n.tradeVolume = drift(n.tradeVolume, target, 0.08);
   });
+
+  updateTradeAgreements(s, (text, tone) =>
+    log(s, { text, category: 'diplomacy', tone, icon: '🚢' }),
+  );
 
   // Expiring treaties.
   s.treaties = s.treaties.filter((t) => {

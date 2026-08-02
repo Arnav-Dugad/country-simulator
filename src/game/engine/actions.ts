@@ -5,7 +5,9 @@ import type {
   LogEntry,
   MilitaryState,
   OrgId,
+  ResourceId,
   TaxKey,
+  TradeAgreement,
   TreatyType,
   VictoryGoalId,
   WarGoal,
@@ -14,11 +16,12 @@ import { BUILDING_INDEX } from '../data/buildings';
 import { POLICY_INDEX } from '../data/policies';
 import { TECH_INDEX } from '../data/technologies';
 import { ADVISOR_INDEX, MAX_ADVISORS, ORG_INDEX } from '../data/institutions';
-import { VICTORY_INDEX } from '../data/definitions';
+import { RESOURCE_INDEX, VICTORY_INDEX } from '../data/definitions';
 import { DECREE_INDEX, decreeCooldownRemaining } from '../data/decrees';
 import { clamp, costScale, gdpPerCapita } from '../selectors';
 import { applyEventEffects } from './events';
 import { nextRandom } from './rng';
+import { quotedPrice, tradeEligibility, type TradeTerm } from './trade';
 import { spendTreasury } from './treasury';
 
 export interface ActionResult {
@@ -452,6 +455,86 @@ export function establishEmbassy(s: GameState, countryId: string): ActionResult 
   nation.embassy = true;
   nation.relations = clamp(nation.relations + 8, -100, 100);
   return ok(`Embassy opened in ${nation.name}.`);
+}
+
+/* ------------------------------------------------------------------ */
+/* Commodity trade                                                     */
+/* ------------------------------------------------------------------ */
+
+export function proposeTradeAgreement(
+  s: GameState,
+  countryId: string,
+  resource: ResourceId,
+  direction: TradeAgreement['direction'],
+  quantity: number,
+  termMonths: TradeTerm,
+): ActionResult {
+  const nation = s.nations.find((n) => n.id === countryId);
+  if (!nation) return fail('Unknown nation');
+
+  const rounded = Math.round(quantity * 10) / 10;
+  const eligibility = tradeEligibility(s, nation, resource, direction, rounded);
+  if (!eligibility.ok) return fail(eligibility.reason ?? 'They will not agree to that');
+
+  const price = quotedPrice(s, nation, resource, direction, termMonths);
+  const def = RESOURCE_INDEX[resource];
+
+  // Acceptance blends relations, trust and how badly they want the deal.
+  const goodwill = (nation.relations + 100) / 200;
+  const chance = clamp(0.3 + goodwill * 0.55 + nation.trust / 400, 0.1, 0.97);
+  if (nextRandom(s) > chance) {
+    nation.relations = clamp(nation.relations - 2, -100, 100);
+    return fail(`${nation.name} declined the proposal.`);
+  }
+
+  s.tradeAgreements.push({
+    id: `trade-${countryId}-${resource}-${direction}-${s.turn}-${Math.floor(Math.random() * 1e5).toString(36)}`,
+    countryId,
+    resource,
+    direction,
+    quantity: rounded,
+    lockedPrice: price,
+    signedTurn: s.turn,
+    termMonths,
+    suspended: false,
+  });
+
+  // Trade builds relations: a signed contract is a shared interest.
+  nation.relations = clamp(nation.relations + 4, -100, 100);
+  nation.trust = clamp(nation.trust + 3, 0, 100);
+
+  push(s, {
+    text: `Signed a ${termMonths / 12}-year agreement to ${direction} ${rounded} units of ${def.name} ${
+      direction === 'import' ? 'from' : 'to'
+    } ${nation.name}.`,
+    category: 'diplomacy',
+    tone: 'good',
+    icon: def.icon,
+  });
+  return ok(`${def.name} agreement signed with ${nation.name}.`);
+}
+
+export function cancelTradeAgreement(s: GameState, agreementId: string): ActionResult {
+  const agreement = s.tradeAgreements.find((a) => a.id === agreementId);
+  if (!agreement) return fail('Agreement not found');
+
+  const nation = s.nations.find((n) => n.id === agreement.countryId);
+  const def = RESOURCE_INDEX[agreement.resource];
+  s.tradeAgreements = s.tradeAgreements.filter((a) => a.id !== agreementId);
+
+  // Breaking a contract early is a diplomatic cost, not a free exit.
+  if (nation) {
+    nation.relations = clamp(nation.relations - 12, -100, 100);
+    nation.trust = clamp(nation.trust - 15, 0, 100);
+  }
+
+  push(s, {
+    text: `Withdrew from the ${def.name} agreement with ${nation?.name ?? agreement.countryId}.`,
+    category: 'diplomacy',
+    tone: 'bad',
+    icon: '📄',
+  });
+  return ok('Agreement terminated.');
 }
 
 /* ------------------------------------------------------------------ */

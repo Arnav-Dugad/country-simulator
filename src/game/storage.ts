@@ -1,4 +1,5 @@
 import type { GameState } from './types';
+import { getCountry } from './data/countries';
 import { SCHEMA_VERSION } from './engine/createGame';
 import type { SaveMeta } from '../firebase/saves';
 import { deserialiseSave, serialiseSave, summariseSave } from '../firebase/saves';
@@ -140,12 +141,24 @@ export function migrate(state: GameState): GameState {
     state.decreeCooldowns = state.decreeCooldowns ?? {};
   }
 
+  // v3 -> v4: commodity trade agreements, and resource endowments on the
+  // simulated nations so they can be plausible trading partners.
+  if (state.version < 4) {
+    state.tradeAgreements = state.tradeAgreements ?? [];
+    for (const nation of state.nations ?? []) {
+      if (!nation.resources) {
+        nation.resources = getCountry(nation.id)?.resources ?? {};
+      }
+    }
+  }
+
   // Defensive: a save hand-edited or truncated in transit should still load.
   if (!Array.isArray(state.victoriesAchieved)) state.victoriesAchieved = [];
   if (typeof state.settings.neverEndGame !== 'boolean') state.settings.neverEndGame = false;
   if (typeof state.decreeCooldowns !== 'object' || state.decreeCooldowns === null) {
     state.decreeCooldowns = {};
   }
+  if (!Array.isArray(state.tradeAgreements)) state.tradeAgreements = [];
 
   state.version = SCHEMA_VERSION;
   return state;

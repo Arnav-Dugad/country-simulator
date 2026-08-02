@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Award, BarChart3, Building2, ChevronsRight, CloudUpload, Factory, FlaskConical, Gauge,
   Gavel, Globe2, Landmark, LayoutDashboard, Leaf, LogOut, Menu, Pause, Play, ScrollText, Shield,
-  Swords, Target, Users, Wallet, X,
+  Ship, Swords, Target, Users, Wallet, X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import type { GameState } from '../../game/types';
@@ -30,6 +30,7 @@ const NAV: { id: PanelId; label: string; icon: typeof LayoutDashboard; group: st
   { id: 'environment', label: 'Environment', icon: Leaf, group: 'Development' },
   { id: 'military', label: 'Defence', icon: Swords, group: 'Power' },
   { id: 'diplomacy', label: 'Diplomacy', icon: Globe2, group: 'Power' },
+  { id: 'trade', label: 'Trade', icon: Ship, group: 'Power' },
   { id: 'intelligence', label: 'Intelligence', icon: Shield, group: 'Power' },
   { id: 'achievements', label: 'Achievements', icon: Award, group: 'Record' },
   { id: 'history', label: 'Chronicle', icon: ScrollText, group: 'Record' },

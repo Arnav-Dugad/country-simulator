@@ -502,6 +502,32 @@ export interface Treaty {
   expiresTurn?: number;
 }
 
+/**
+ * A standing agreement to buy or sell a fixed quantity of one commodity with
+ * one nation, at a price locked in when it was signed.
+ *
+ * This is what turns resources from an automatic market balance into a
+ * diplomatic instrument: a long contract insulates you from world prices, but
+ * it binds you to a counterparty who can be sanctioned, go to war, or simply
+ * run out of the thing.
+ */
+export interface TradeAgreement {
+  id: string;
+  countryId: string;
+  resource: ResourceId;
+  /** From the player's perspective. */
+  direction: 'import' | 'export';
+  /** Units per month. */
+  quantity: number;
+  /** Price multiplier locked at signing, against the resource's base price. */
+  lockedPrice: number;
+  signedTurn: number;
+  /** Contract length in months; the agreement lapses when it runs out. */
+  termMonths: number;
+  /** Set when the counterparty can no longer deliver or take delivery. */
+  suspended: boolean;
+}
+
 export type WarGoal = 'conquest' | 'punitive' | 'liberation' | 'resources' | 'defensive';
 
 export interface War {
@@ -543,6 +569,11 @@ export interface ForeignNation {
   personality: 'pragmatic' | 'aggressive' | 'isolationist' | 'mercantile' | 'idealist';
   /** Memory of player actions, decays over time. */
   trust: number;
+  /**
+   * Resource endowment, 0–100, copied from the country profile. Determines
+   * what this nation can plausibly sell you and what it needs to buy.
+   */
+  resources: Partial<Record<ResourceId, number>>;
 }
 
 export type OrgId = 'un' | 'nato' | 'eu' | 'wto' | 'brics' | 'opec' | 'g20' | 'asean' | 'au' | 'paris-accord';
@@ -875,6 +906,34 @@ export interface PendingEvent {
   turn: number;
 }
 
+/**
+ * The panels a recommendation can point at.
+ *
+ * Declared here rather than in the UI store so the engine can reference a
+ * destination without importing anything from React — the store's `PanelId`
+ * is derived from this, so the two can never drift apart.
+ */
+export type PanelTarget =
+  | 'dashboard'
+  | 'economy'
+  | 'budget'
+  | 'policies'
+  | 'decrees'
+  | 'research'
+  | 'construction'
+  | 'society'
+  | 'environment'
+  | 'military'
+  | 'diplomacy'
+  | 'trade'
+  | 'intelligence'
+  | 'provinces'
+  | 'politics'
+  | 'cabinet'
+  | 'objectives'
+  | 'achievements'
+  | 'history';
+
 export interface GameSettings {
   difficulty: DifficultyId;
   era: EraId;
@@ -939,6 +998,7 @@ export interface GameState {
 
   nations: ForeignNation[];
   treaties: Treaty[];
+  tradeAgreements: TradeAgreement[];
   wars: War[];
   orgs: OrgId[];
 

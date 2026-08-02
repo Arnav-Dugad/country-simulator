@@ -1,5 +1,6 @@
 import type { EventChoice, EventEffects, GameEventDef, GameState, LogEntry } from '../types';
 import { EVENTS, EVENT_INDEX } from '../data/events';
+import { DIFFICULTY_INDEX } from '../data/definitions';
 import { clamp, costScale, gdpPerCapita } from '../selectors';
 import { nextRandom, weightedPick } from './rng';
 import { addTreasury, spendTreasury } from './treasury';
@@ -51,12 +52,16 @@ export function rollEvent(s: GameState): void {
   // A queued event blocks new ones — the player must resolve it first.
   if (s.eventQueue.length > 0) return;
 
+  const difficulty = DIFFICULTY_INDEX[s.settings.difficulty];
+
   let chance = FREQUENCY_CHANCE[s.settings.eventFrequency];
   // Unstable, unhappy countries generate more news.
   chance *= 1 + (60 - Math.min(60, s.stability)) / 90;
   chance *= 1 + s.environment.disasterRisk / 300;
+  // Difficulty is what the setup screen promises it is.
+  chance *= difficulty.crisisMultiplier;
 
-  if (nextRandom(s) > chance) return;
+  if (nextRandom(s) > Math.min(0.95, chance)) return;
 
   // Chained events fire first and unconditionally.
   if (s.chainedEvents.length > 0) {
@@ -81,6 +86,10 @@ export function rollEvent(s: GameState): void {
     let w = def.weight;
     // Weight severity toward the player's current situation so events feel causal.
     if (def.severity === 'critical') w *= clamp((70 - s.stability) / 30, 0.15, 2.4);
+    // And toward trouble on the harder settings: a brutal campaign should not
+    // just get *more* events, it should get worse ones.
+    if (def.severity === 'critical' || def.severity === 'major') w *= difficulty.crisisMultiplier;
+    if (def.category === 'opportunity') w /= difficulty.crisisMultiplier;
     if (def.category === 'economy' && s.economy.growth < 0) w *= 1.9;
     if (def.category === 'politics' && s.approval < 40) w *= 1.8;
     if (def.category === 'environment' && s.environment.emissions > 600) w *= 1.6;
@@ -190,8 +199,11 @@ export function resolveEvent(s: GameState, choiceId: string): ResolutionOutcome 
   let failed = false;
   if (choice.riskChance && choice.failureEffects) {
     // Competence tilts the odds: a stable, well-run state gambles better.
+    // Difficulty tilts them back, but more gently than it drives frequency —
+    // a gamble should still feel like the odds you were quoted.
     const competence = (s.stability + (100 - s.corruption) + s.intelligence.capability) / 300;
-    const effectiveRisk = clamp(choice.riskChance * (1.35 - competence * 0.6), 0.02, 0.95);
+    const difficultyBias = 0.7 + DIFFICULTY_INDEX[s.settings.difficulty].crisisMultiplier * 0.3;
+    const effectiveRisk = clamp(choice.riskChance * (1.35 - competence * 0.6) * difficultyBias, 0.02, 0.95);
     failed = nextRandom(s) < effectiveRisk;
   }
 

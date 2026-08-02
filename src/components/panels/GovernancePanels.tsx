@@ -11,6 +11,7 @@ import { policyAvailability } from '../../game/engine/actions';
 import { useGameStore } from '../../store/gameStore';
 import { Badge, Button, Card, EmptyState, Meter, Reveal, Slider, Stat, Tabs, meterColor } from '../ui/primitives';
 import { ModifierList } from './ModifierList';
+import { AdvisoryBoard } from './AdvisoryBoard';
 import { chartTooltip } from './chartHelpers';
 
 /* ================================ Policies ============================== */
@@ -323,6 +324,10 @@ export function CabinetPanel({ game }: { game: GameState }) {
           />
           <Stat label="Available candidates" value={available.length} accent="#4f8cff" />
         </div>
+      </Reveal>
+
+      <Reveal delay={0.03}>
+        <AdvisoryBoard game={game} limit={6} title="Everything your cabinet would raise" />
       </Reveal>
 
       {appointed.length > 0 && (

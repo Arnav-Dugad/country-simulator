@@ -33,8 +33,9 @@ import { nextRandom, pick, randRange } from './rng';
  * 1 — initial release.
  * 2 — adds `settings.neverEndGame` and `victoriesAchieved`.
  * 3 — adds `decreeCooldowns` for executive actions.
+ * 4 — adds `tradeAgreements` and per-nation resource endowments.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /* ------------------------------------------------------------------ */
 /* Province generation                                                 */
@@ -212,6 +213,7 @@ function generateNations(
       embassy: c.gdp >= 400,
       personality: PERSONALITIES[Math.floor(nextRandom(seedState) * PERSONALITIES.length)],
       trust: clamp(50 + randRange(seedState, -15, 15), 10, 90),
+      resources: c.resources,
     };
   });
 }
@@ -519,6 +521,7 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
 
     nations: generateNations(seedState, config.countryId, config.government, config.region),
     treaties: [],
+    tradeAgreements: [],
     wars: [],
     orgs: [],
 
