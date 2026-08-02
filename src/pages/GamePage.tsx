@@ -10,6 +10,7 @@ import { GameOverModal } from '../components/game/GameOverModal';
 import { Dashboard } from '../components/panels/Dashboard';
 import { BudgetPanel, EconomyPanel } from '../components/panels/EconomyPanels';
 import { CabinetPanel, PoliciesPanel, PoliticsPanel, ProvincesPanel } from '../components/panels/GovernancePanels';
+import { DecreesPanel } from '../components/panels/DecreesPanel';
 import { ConstructionPanel, ResearchPanel } from '../components/panels/ProgressPanels';
 import { EnvironmentPanel, SocietyPanel } from '../components/panels/SocietyPanels';
 import { DiplomacyPanel, IntelligencePanel, MilitaryPanel } from '../components/panels/PowerPanels';
@@ -44,6 +45,7 @@ function PanelHost({ game, panel }: { game: GameState; panel: ReturnType<typeof 
     case 'economy': return <EconomyPanel game={game} />;
     case 'budget': return <BudgetPanel game={game} />;
     case 'policies': return <PoliciesPanel game={game} />;
+    case 'decrees': return <DecreesPanel game={game} />;
     case 'politics': return <PoliticsPanel game={game} />;
     case 'cabinet': return <CabinetPanel game={game} />;
     case 'provinces': return <ProvincesPanel game={game} />;

@@ -8,9 +8,23 @@ import { EVENTS, EVENT_INDEX } from '../data/events';
 import { ACHIEVEMENTS } from '../data/achievements';
 import { ADVISORS, ORGS } from '../data/institutions';
 import { GOVERNMENTS, IDEOLOGIES, RESOURCES, TRAITS } from '../data/definitions';
+import { DECREES } from '../data/decrees';
+import type { EventEffects } from '../types';
 import { MODIFIER_LABELS } from '../types';
 
 const MODIFIER_KEYS = new Set(Object.keys(MODIFIER_LABELS));
+
+/**
+ * Every key of `EventEffects`, listed explicitly so a new key added to the type
+ * without being handled here shows up as a compile error rather than silently
+ * weakening this test.
+ */
+const EFFECT_KEY_SAMPLE: Required<EventEffects> = {
+  treasury: 0, approval: 0, stability: 0, gdpShock: 0, population: 0, inflation: 0,
+  unemployment: 0, corruption: 0, militaryStrength: 0, research: 0, health: 0,
+  education: 0, happiness: 0, crime: 0, emissions: 0, softPower: 0, civilLiberties: 0,
+  infrastructure: 0, inequality: 0, intelligence: 0, globalRelations: 0, relations: [],
+};
 
 function expectUniqueIds(items: { id: string }[], label: string): void {
   const seen = new Set<string>();
@@ -211,6 +225,57 @@ describe('events', () => {
         for (const key of Object.keys(c.temporaryModifiers?.modifiers ?? {})) {
           expect(MODIFIER_KEYS.has(key), `${e.id}/${c.id} uses unknown modifier "${key}"`).toBe(true);
         }
+      }
+    }
+  });
+});
+
+describe('executive actions', () => {
+  it('has unique ids and sane costs and cooldowns', () => {
+    expectUniqueIds(DECREES, 'decrees');
+    for (const d of DECREES) {
+      expect(d.cooldown, `${d.id} needs a cooldown`).toBeGreaterThan(0);
+      expect(d.cost, `${d.id} cost cannot be negative`).toBeGreaterThanOrEqual(0);
+      expect(d.name.length).toBeGreaterThan(3);
+      expect(d.description.length, `${d.id} needs a real description`).toBeGreaterThan(30);
+      expect(d.outcome.length, `${d.id} needs an outcome line`).toBeGreaterThan(10);
+    }
+  });
+
+  it('uses only known effect and modifier keys', () => {
+    const effectKeys = new Set(Object.keys(EFFECT_KEY_SAMPLE));
+    for (const d of DECREES) {
+      for (const key of Object.keys(d.effects)) {
+        expect(effectKeys.has(key), `${d.id} uses unknown effect "${key}"`).toBe(true);
+      }
+      for (const key of Object.keys(d.temporary?.modifiers ?? {})) {
+        expect(MODIFIER_KEYS.has(key), `${d.id} uses unknown modifier "${key}"`).toBe(true);
+      }
+    }
+  });
+
+  it('gives every action a real trade-off', () => {
+    // A decree with no cost, no cooldown pressure and only upside would be a
+    // free win; every one must give something up somewhere.
+    for (const d of DECREES) {
+      const effectValues = Object.entries(d.effects).filter(
+        (e): e is [string, number] => typeof e[1] === 'number',
+      );
+      const hasDownside =
+        d.cost > 0 ||
+        d.caution !== undefined ||
+        effectValues.some(([key, value]) => {
+          const inverted = ['inflation', 'unemployment', 'corruption', 'emissions', 'crime', 'inequality'];
+          return inverted.includes(key) ? value > 0 : value < 0;
+        });
+      expect(hasDownside, `${d.id} is a free win — it needs a cost or a downside`).toBe(true);
+    }
+  });
+
+  it('references only real technologies in its requirements', () => {
+    for (const d of DECREES) {
+      for (const t of d.requires?.tech ?? []) {
+        expect(TECH_INDEX[t], `${d.id} requires unknown tech ${t}`).toBeDefined();
       }
     }
   });

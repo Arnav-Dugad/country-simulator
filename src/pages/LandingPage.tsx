@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   ArrowRight, Cloud, CloudOff, Crown, Download, Globe2, LogIn, LogOut, Sparkles, Trash2, Trophy,
+  UserRound,
 } from 'lucide-react';
 import type { SaveMeta } from '../firebase/saves';
 import { listCloudSaves, loadCloudSave } from '../firebase/saves';
@@ -129,6 +130,11 @@ export function LandingPage() {
           <Link to="/leaderboard">
             <Button variant="ghost" size="sm" icon={<Trophy size={15} />}>
               <span className="hidden sm:inline">Leaderboard</span>
+            </Button>
+          </Link>
+          <Link to="/profile">
+            <Button variant="ghost" size="sm" icon={<UserRound size={15} />}>
+              <span className="hidden sm:inline">Profile</span>
             </Button>
           </Link>
           {available ? (

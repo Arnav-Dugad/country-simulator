@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, CloudOff, Crown, Medal, Trophy } from 'lucide-react';
+import { ArrowLeft, CloudOff, Crown, Medal, Trophy, UserRound } from 'lucide-react';
 import clsx from 'clsx';
 import type { LeaderboardEntry } from '../firebase/saves';
 import { fetchLeaderboard } from '../firebase/saves';
@@ -38,9 +38,16 @@ export function LeaderboardPage() {
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
-      <Link to="/" className="mb-6 inline-flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-white">
-        <ArrowLeft size={14} /> Back
-      </Link>
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <Link to="/" className="inline-flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-white">
+          <ArrowLeft size={14} /> Back
+        </Link>
+        <Link to="/profile">
+          <Button variant="ghost" size="sm" icon={<UserRound size={14} />}>
+            Your profile
+          </Button>
+        </Link>
+      </div>
 
       <header className="mb-8 text-center">
         <Trophy size={30} className="mx-auto mb-3 text-gold-400" />

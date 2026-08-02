@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Award, BarChart3, Building2, ChevronsRight, CloudUpload, Factory, FlaskConical, Gauge,
-  Globe2, Landmark, LayoutDashboard, Leaf, LogOut, Menu, Pause, Play, ScrollText, Shield,
+  Gavel, Globe2, Landmark, LayoutDashboard, Leaf, LogOut, Menu, Pause, Play, ScrollText, Shield,
   Swords, Target, Users, Wallet, X,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -20,6 +20,7 @@ const NAV: { id: PanelId; label: string; icon: typeof LayoutDashboard; group: st
   { id: 'economy', label: 'Economy', icon: BarChart3, group: 'Government' },
   { id: 'budget', label: 'Treasury', icon: Wallet, group: 'Government' },
   { id: 'policies', label: 'Legislation', icon: ScrollText, group: 'Government' },
+  { id: 'decrees', label: 'Executive Actions', icon: Gavel, group: 'Government' },
   { id: 'politics', label: 'Politics', icon: Landmark, group: 'Government' },
   { id: 'cabinet', label: 'Cabinet', icon: Users, group: 'Government' },
   { id: 'provinces', label: 'Provinces', icon: Building2, group: 'Government' },
@@ -289,6 +290,12 @@ function TopBar({ game }: { game: GameState }) {
           )}
 
           {eventPending && <Badge tone="warn" className="hidden animate-pulse sm:inline-flex">Decision required</Badge>}
+
+          {game.settings.neverEndGame && !eventPending && (
+            <Tooltip label="Eternal mode: no loss condition can end this campaign.">
+              <Badge tone="info" className="hidden lg:inline-flex">♾️ Eternal</Badge>
+            </Tooltip>
+          )}
 
           {user && (
             <Tooltip label={syncing ? 'Saving…' : 'Save to cloud'}>

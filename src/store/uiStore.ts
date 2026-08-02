@@ -16,6 +16,7 @@ export type PanelId =
   | 'economy'
   | 'budget'
   | 'policies'
+  | 'decrees'
   | 'research'
   | 'construction'
   | 'society'

@@ -5,21 +5,24 @@ import {
 } from 'recharts';
 import { Check, Lock, Search, Trophy } from 'lucide-react';
 import clsx from 'clsx';
-import type { EventCategory, GameState, LogEntry } from '../../game/types';
+import type { GameState, LogEntry } from '../../game/types';
 import { ACHIEVEMENTS, TIER_COLORS, TOTAL_ACHIEVEMENT_POINTS } from '../../game/data/achievements';
-import { VICTORY_INDEX } from '../../game/data/definitions';
+import { VICTORY_GOALS, VICTORY_INDEX } from '../../game/data/definitions';
 import { MONTH_SHORT } from '../../game/selectors';
 import { computeScore, scoreTitle, victoryProgress } from '../../game/engine/scoring';
+import { useGameStore } from '../../store/gameStore';
 import { Badge, Card, EmptyState, Meter, Reveal, Stat, Tabs, meterColor } from '../ui/primitives';
 import { ChartFrame, chartAxis, chartTooltip } from './chartHelpers';
 
 /* =============================== Objectives ============================= */
 
 export function ObjectivesPanel({ game }: { game: GameState }) {
+  const setVictoryGoal = useGameStore((s) => s.setVictoryGoal);
   const goal = VICTORY_INDEX[game.settings.victoryGoal];
   const progress = useMemo(() => victoryProgress(game), [game]);
   const score = useMemo(() => computeScore(game), [game]);
   const met = progress.filter((p) => p.met).length;
+  const alreadyWon = game.victoriesAchieved.includes(game.settings.victoryGoal);
 
   const pillars = [
     { label: 'Prosperity', value: score.prosperity, max: 1700, color: '#f5d073' },
@@ -47,10 +50,31 @@ export function ObjectivesPanel({ game }: { game: GameState }) {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Current score" value={score.total.toLocaleString()} accent="#f5d073" icon={<Trophy size={14} />} />
           <Stat label="Standing" value={scoreTitle(score.total)} accent="#9d6bff" />
-          <Stat label="Objectives met" value={`${met} / ${progress.length}`} accent="#7ee787" />
+          <Stat
+            label={game.victoriesAchieved.length > 0 ? 'Objectives achieved' : 'Conditions met'}
+            value={game.victoriesAchieved.length > 0 ? game.victoriesAchieved.length : `${met} / ${progress.length}`}
+            accent="#7ee787"
+          />
           <Stat label="Months in office" value={game.turn} hint={`${Math.floor(game.turn / 12)} years`} accent="#4f8cff" />
         </div>
       </Reveal>
+
+      {game.victoriesAchieved.length > 0 && (
+        <Reveal delay={0.03}>
+          <Card title="Objectives achieved" subtitle="Recorded permanently in this campaign" icon="🏆">
+            <div className="flex flex-wrap gap-2">
+              {game.victoriesAchieved.map((id) => {
+                const achieved = VICTORY_INDEX[id];
+                return (
+                  <Badge key={id} tone="gold">
+                    {achieved?.icon} {achieved?.name ?? id}
+                  </Badge>
+                );
+              })}
+            </div>
+          </Card>
+        </Reveal>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Reveal delay={0.05}>
@@ -76,11 +100,25 @@ export function ObjectivesPanel({ game }: { game: GameState }) {
 
             <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.03] p-3">
               <p className="text-[11px] leading-relaxed text-slate-400">
-                {met === progress.length
-                  ? 'Every condition is satisfied. Victory will be declared on the next month.'
-                  : `${progress.length - met} condition${progress.length - met === 1 ? '' : 's'} still outstanding. You can keep playing after victory if you want a higher score.`}
+                {alreadyWon
+                  ? 'You have already achieved this objective. In eternal mode the campaign continues — keep building for a higher score.'
+                  : met === progress.length
+                    ? game.settings.neverEndGame
+                      ? 'Every condition is satisfied. It will be recorded next month, and the campaign will continue.'
+                      : 'Every condition is satisfied. Victory will be declared on the next month.'
+                    : `${progress.length - met} condition${progress.length - met === 1 ? '' : 's'} still outstanding. You can keep playing after victory if you want a higher score.`}
               </p>
             </div>
+
+            {game.settings.neverEndGame && (
+              <div className="mt-3 rounded-xl border border-aurora-violet/30 bg-aurora-violet/[0.07] p-3">
+                <p className="text-[11px] font-semibold text-aurora-violet">♾️ Eternal mode</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                  No loss condition can end this campaign — not bankruptcy, collapse, depopulation, a lost
+                  election or the hundred-year mark. Objectives are recorded when you reach them.
+                </p>
+              </div>
+            )}
           </Card>
         </Reveal>
 
@@ -103,6 +141,46 @@ export function ObjectivesPanel({ game }: { game: GameState }) {
               </div>
             </Card>
           </Reveal>
+
+          {game.settings.neverEndGame && (
+            <Reveal delay={0.1}>
+              <Card
+                title="Change objective"
+                subtitle="Eternal mode lets you redirect the campaign at a new goal"
+                icon="🎯"
+              >
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {VICTORY_GOALS.map((option) => {
+                    const current = option.id === game.settings.victoryGoal;
+                    const won = game.victoriesAchieved.includes(option.id);
+                    return (
+                      <button
+                        key={option.id}
+                        disabled={current}
+                        onClick={() => setVictoryGoal(option.id)}
+                        className={clsx(
+                          'focus-ring rounded-xl border p-3 text-left transition',
+                          current
+                            ? 'cursor-default border-gold-500/50 bg-gold-500/[0.08]'
+                            : 'border-white/10 hover:border-white/25 hover:bg-white/[0.05]',
+                        )}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span>{option.icon}</span>
+                          <span className="text-xs font-semibold text-white">{option.name}</span>
+                          {current && <Badge tone="gold">Active</Badge>}
+                          {won && !current && <Badge tone="good">Done</Badge>}
+                        </span>
+                        <span className="mt-1 block text-[11px] leading-relaxed text-slate-400">
+                          {option.description}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </Card>
+            </Reveal>
+          )}
 
           <Reveal delay={0.12}>
             <Card title="Score over time" icon="📈">
@@ -363,4 +441,3 @@ export function HistoryPanel({ game }: { game: GameState }) {
   );
 }
 
-export type { EventCategory };

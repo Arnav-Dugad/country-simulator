@@ -502,8 +502,15 @@ export const VICTORY_GOALS: VictoryGoal[] = [
     id: 'superpower',
     name: 'Superpower',
     icon: '🌐',
-    description: 'Project force and influence further than anyone else alive.',
-    conditions: ['Military strength ≥ 90', 'GDP ≥ $8T', 'Average relations ≥ 20', 'Stability ≥ 60'],
+    description:
+      'Project force and influence further than anyone else alive. Measured against the real world, so the bar rises as your rivals do.',
+    conditions: [
+      'Military strength ≥ 90, and the strongest on earth',
+      'GDP at least 1.5× the largest rival economy',
+      'Average relations ≥ 25',
+      'Soft power ≥ 60',
+      'Stability ≥ 65',
+    ],
   },
   {
     id: 'utopia',

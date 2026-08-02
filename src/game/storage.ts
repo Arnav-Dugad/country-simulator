@@ -1,7 +1,7 @@
 import type { GameState } from './types';
 import { SCHEMA_VERSION } from './engine/createGame';
 import type { SaveMeta } from '../firebase/saves';
-import { deserialiseSave, serialiseSave } from '../firebase/saves';
+import { deserialiseSave, serialiseSave, summariseSave } from '../firebase/saves';
 
 const SAVES_KEY = 'sovereign:saves';
 const AUTOSAVE_KEY = 'sovereign:autosave';
@@ -35,30 +35,11 @@ function writeSaves(saves: LocalSave[]): void {
   }
 }
 
-function metaOf(state: GameState): SaveMeta {
-  return {
-    id: state.id,
-    nationName: state.identity.name,
-    leaderName: `${state.leader.title} ${state.leader.name}`.trim(),
-    iso2: state.identity.iso2,
-    flagColors: state.identity.customFlag?.colors ?? null,
-    turn: state.turn,
-    year: state.year,
-    month: state.month,
-    score: state.score,
-    difficulty: state.settings.difficulty,
-    victoryGoal: state.settings.victoryGoal,
-    gdp: state.economy.gdp,
-    approval: state.approval,
-    updatedAt: state.updatedAt,
-    gameOver: state.gameOver !== null,
-    victory: state.gameOver?.victory ?? false,
-  };
-}
-
 export function saveGameLocally(state: GameState): void {
   const saves = readSaves().filter((s) => s.meta.id !== state.id);
-  saves.unshift({ meta: metaOf(state), payload: serialiseSave(state) });
+  // Same summary as the cloud path, so a local and a synced save describe a
+  // campaign identically and the career profile can merge them.
+  saves.unshift({ meta: summariseSave(state), payload: serialiseSave(state) });
   writeSaves(saves.slice(0, 12));
 }
 
@@ -137,14 +118,36 @@ export function writePreferences(prefs: Preferences): void {
 }
 
 /**
- * Brings an older save up to the current schema. Returning the state unchanged
- * is correct while there is only one version; the guard exists so a future
- * schema change cannot silently load a state with missing fields.
+ * Brings an older save up to the current schema.
+ *
+ * Migrations are additive and idempotent: each one fills in fields the engine
+ * now expects but an older save never wrote. A save from a *newer* build is
+ * rejected outright rather than loaded with fields we cannot interpret.
  */
 export function migrate(state: GameState): GameState {
   if (typeof state.version !== 'number' || state.version > SCHEMA_VERSION) {
     throw new Error('This save was made by a newer version of the game.');
   }
+
+  // v1 -> v2: eternal mode and the record of achieved victory goals.
+  if (state.version < 2) {
+    state.settings = { ...state.settings, neverEndGame: state.settings?.neverEndGame ?? false };
+    state.victoriesAchieved = state.victoriesAchieved ?? [];
+  }
+
+  // v2 -> v3: executive action cooldowns.
+  if (state.version < 3) {
+    state.decreeCooldowns = state.decreeCooldowns ?? {};
+  }
+
+  // Defensive: a save hand-edited or truncated in transit should still load.
+  if (!Array.isArray(state.victoriesAchieved)) state.victoriesAchieved = [];
+  if (typeof state.settings.neverEndGame !== 'boolean') state.settings.neverEndGame = false;
+  if (typeof state.decreeCooldowns !== 'object' || state.decreeCooldowns === null) {
+    state.decreeCooldowns = {};
+  }
+
+  state.version = SCHEMA_VERSION;
   return state;
 }
 

@@ -14,6 +14,13 @@ import {
 import type { GameState, HistoryPoint } from '../game/types';
 import { db, isFirebaseReady } from './config';
 
+/**
+ * Summary of a campaign, stored alongside the save so lists and the career
+ * profile can render without deserialising the whole state.
+ *
+ * Fields added after launch are optional: an older save simply lacks them, and
+ * every consumer must tolerate `undefined`.
+ */
 export interface SaveMeta {
   id: string;
   nationName: string;
@@ -31,6 +38,18 @@ export interface SaveMeta {
   updatedAt: number;
   gameOver: boolean;
   victory: boolean;
+  /* --- added in schema v2 --- */
+  createdAt?: number;
+  countryId?: string | null;
+  population?: number;
+  happiness?: number;
+  achievements?: number;
+  technologies?: number;
+  policies?: number;
+  termsServed?: number;
+  eternal?: boolean;
+  victoriesAchieved?: number;
+  warsWon?: number;
 }
 
 export interface LeaderboardEntry {
@@ -51,7 +70,7 @@ export interface LeaderboardEntry {
 /** Firestore documents cap at 1 MiB; stay comfortably under it. */
 const MAX_SAVE_BYTES = 700_000;
 
-function summarise(state: GameState): SaveMeta {
+export function summariseSave(state: GameState): SaveMeta {
   return {
     id: state.id,
     nationName: state.identity.name,
@@ -69,6 +88,17 @@ function summarise(state: GameState): SaveMeta {
     updatedAt: state.updatedAt,
     gameOver: state.gameOver !== null,
     victory: state.gameOver?.victory ?? false,
+    createdAt: state.createdAt,
+    countryId: state.identity.baseCountryId,
+    population: state.society.population,
+    happiness: state.society.happiness,
+    achievements: state.achievements.length,
+    technologies: state.research.completed.length,
+    policies: state.activePolicies.length,
+    termsServed: state.termsServed,
+    eternal: state.settings.neverEndGame,
+    victoriesAchieved: state.victoriesAchieved.length,
+    warsWon: state.wars.filter((w) => w.resolved === 'victory').length,
   };
 }
 
@@ -121,7 +151,7 @@ export async function saveGameToCloud(uid: string, state: GameState): Promise<vo
 
   await setDoc(doc(database, 'users', uid, 'saves', state.id), {
     payload,
-    meta: summarise(state),
+    meta: summariseSave(state),
     updatedAt: serverTimestamp(),
   });
 }

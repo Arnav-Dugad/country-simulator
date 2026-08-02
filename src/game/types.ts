@@ -885,6 +885,13 @@ export interface GameSettings {
   enableWars: boolean;
   enableDisasters: boolean;
   ironman: boolean;
+  /**
+   * Eternal mode: disables every loss condition (bankruptcy, collapse, forced
+   * removal, depopulation) and the 100-year cap. Victory goals still register
+   * as achieved — logged and celebrated — but never end the campaign, so play
+   * can continue indefinitely.
+   */
+  neverEndGame: boolean;
   startYear: number;
   mapSeed: number;
 }
@@ -944,6 +951,8 @@ export interface GameState {
   achievements: string[];
   /** defId -> turn it last fired. */
   eventCooldowns: Record<string, number>;
+  /** decreeId -> turn it was last enacted. */
+  decreeCooldowns: Record<string, number>;
   /** Events queued to be shown to the player. */
   eventQueue: PendingEvent[];
   /** Ids unlocked by a previous event's chain. */
@@ -953,6 +962,11 @@ export interface GameState {
   log: LogEntry[];
 
   score: number;
+  /**
+   * Victory goals already satisfied. In eternal mode a campaign can rack up
+   * several; in normal mode the first one ends the run.
+   */
+  victoriesAchieved: VictoryGoalId[];
   gameOver: null | { reason: string; victory: boolean; turn: number; title: string };
   /** Random seed, advanced deterministically each tick. */
   rngSeed: number;
@@ -999,6 +1013,7 @@ export interface SetupConfig {
   enableWars: boolean;
   enableDisasters: boolean;
   ironman: boolean;
+  neverEndGame: boolean;
   primaryColor: string;
   secondaryColor: string;
   /** Custom-nation slider allocation. */

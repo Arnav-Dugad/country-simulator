@@ -7,14 +7,19 @@ import type {
   OrgId,
   TaxKey,
   TreatyType,
+  VictoryGoalId,
   WarGoal,
 } from '../types';
 import { BUILDING_INDEX } from '../data/buildings';
 import { POLICY_INDEX } from '../data/policies';
 import { TECH_INDEX } from '../data/technologies';
 import { ADVISOR_INDEX, MAX_ADVISORS, ORG_INDEX } from '../data/institutions';
+import { VICTORY_INDEX } from '../data/definitions';
+import { DECREE_INDEX, decreeCooldownRemaining } from '../data/decrees';
 import { clamp, costScale, gdpPerCapita } from '../selectors';
+import { applyEventEffects } from './events';
 import { nextRandom } from './rng';
+import { spendTreasury } from './treasury';
 
 export interface ActionResult {
   ok: boolean;
@@ -261,8 +266,28 @@ export function setTax(s: GameState, key: TaxKey, value: number): ActionResult {
   return ok(`${limits.label} set to ${next}%.`);
 }
 
+/**
+ * Maximum funding level per department.
+ *
+ * Defence gets a wider range than the rest because the real spread is wider:
+ * Israel and Russia spend several times the world-average share of GDP on it,
+ * while most of Europe spends a fraction. Health and education vary far less.
+ */
+export const BUDGET_MAX: Record<BudgetDept, number> = {
+  healthcare: 2,
+  education: 2,
+  military: 3.5,
+  infrastructure: 2,
+  welfare: 2,
+  research: 2,
+  police: 2,
+  environment: 2,
+  culture: 2,
+  intelligence: 2,
+};
+
 export function setBudget(s: GameState, dept: BudgetDept, level: number): ActionResult {
-  const next = clamp(Math.round(level * 20) / 20, 0, 2);
+  const next = clamp(Math.round(level * 20) / 20, 0, BUDGET_MAX[dept]);
   const delta = next - s.budget[dept].level;
   s.budget[dept].level = next;
   if (delta < -0.05) s.approval = clamp(s.approval + delta * 3, 0, 100);
@@ -632,4 +657,153 @@ export function grantAutonomy(s: GameState, provinceId: string): ActionResult {
   province.loyalty = clamp(province.loyalty + 8, 0, 100);
   s.stability = clamp(s.stability - 1.5, 0, 100);
   return ok(`Autonomy extended to ${province.name}.`);
+}
+
+/* ------------------------------------------------------------------ */
+/* Executive actions                                                   */
+/* ------------------------------------------------------------------ */
+
+export interface DecreeAvailability {
+  enabled: boolean;
+  reason: string | null;
+  cost: number;
+  cooldownRemaining: number;
+}
+
+export function decreeAvailability(s: GameState, decreeId: string): DecreeAvailability {
+  const decree = DECREE_INDEX[decreeId];
+  const scale = costScale(s.economy.gdp);
+  if (!decree) {
+    return { enabled: false, reason: 'Unknown action', cost: 0, cooldownRemaining: 0 };
+  }
+
+  const cost = decree.cost * scale;
+  const cooldownRemaining = decreeCooldownRemaining(s, decree);
+
+  if (cooldownRemaining > 0) {
+    return {
+      enabled: false,
+      reason: `Available in ${cooldownRemaining} month${cooldownRemaining === 1 ? '' : 's'}`,
+      cost,
+      cooldownRemaining,
+    };
+  }
+  if (s.economy.treasury < cost) {
+    return { enabled: false, reason: 'Insufficient treasury', cost, cooldownRemaining };
+  }
+
+  const r = decree.requires;
+  if (r?.minStability !== undefined && s.stability < r.minStability) {
+    return { enabled: false, reason: `Requires ${r.minStability} stability`, cost, cooldownRemaining };
+  }
+  if (r?.minApproval !== undefined && s.approval < r.minApproval) {
+    return { enabled: false, reason: `Requires ${r.minApproval}% approval`, cost, cooldownRemaining };
+  }
+  if (r?.maxApproval !== undefined && s.approval > r.maxApproval) {
+    return {
+      enabled: false,
+      reason: `Only when approval is below ${r.maxApproval}%`,
+      cost,
+      cooldownRemaining,
+    };
+  }
+  if (r?.government && !r.government.includes(s.identity.government)) {
+    return { enabled: false, reason: 'Not available under this government', cost, cooldownRemaining };
+  }
+  if (r?.tech && !r.tech.every((t) => s.research.completed.includes(t))) {
+    return { enabled: false, reason: 'Missing required technology', cost, cooldownRemaining };
+  }
+  if (r?.atWar !== undefined && s.wars.some((w) => !w.resolved) !== r.atWar) {
+    return {
+      enabled: false,
+      reason: r.atWar ? 'Only available during a war' : 'Not available during a war',
+      cost,
+      cooldownRemaining,
+    };
+  }
+
+  return { enabled: true, reason: null, cost, cooldownRemaining };
+}
+
+export function enactDecree(s: GameState, decreeId: string): ActionResult {
+  const availability = decreeAvailability(s, decreeId);
+  if (!availability.enabled) return fail(availability.reason ?? 'Cannot enact');
+
+  const decree = DECREE_INDEX[decreeId];
+  spendTreasury(s, availability.cost);
+  applyEventEffects(s, decree.effects);
+
+  if (decree.temporary) {
+    s.activeModifiers.push({
+      id: `decree-${decree.id}-${s.turn}`,
+      label: decree.temporary.label,
+      source: decree.name,
+      modifiers: decree.temporary.modifiers,
+      monthsRemaining: decree.temporary.months,
+      icon: decree.icon,
+    });
+  }
+
+  // A few actions do something the generic effects block cannot express.
+  switch (decree.id) {
+    case 'debt-restructuring':
+      // Creditors take a haircut; the rating takes the hit.
+      s.economy.debt = Math.max(0, s.economy.debt * 0.8);
+      s.economy.creditRating = clamp(s.economy.creditRating - 22, 1, 100);
+      break;
+    case 'privatisation-drive':
+      // Selling the assets permanently shrinks what the state can earn from them.
+      s.economy.reserves = Math.max(0, s.economy.reserves * 0.85);
+      break;
+    case 'sovereign-fund-injection':
+      s.economy.reserves = Math.max(0, s.economy.reserves * 0.55);
+      break;
+    case 'mobilise-reserves':
+      s.military.readiness = clamp(s.military.readiness + 22, 0, 100);
+      s.military.morale = clamp(s.military.morale + 8, 0, 100);
+      break;
+    case 'international-appeal':
+      // Support comes with conditions the player does not get to negotiate.
+      s.economy.debt += (s.economy.gdp * 0.04);
+      break;
+  }
+
+  s.decreeCooldowns[decree.id] = s.turn;
+  push(s, {
+    text: `${decree.name}: ${decree.outcome}`,
+    category: 'policy',
+    tone: 'neutral',
+    icon: decree.icon,
+  });
+  return ok(decree.outcome);
+}
+
+/* ------------------------------------------------------------------ */
+/* Objectives                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Redirects the campaign at a new victory goal.
+ *
+ * Only permitted in eternal mode: in a normal campaign the objective is the
+ * terms you accepted at the start, and swapping it mid-run would let a player
+ * pick whichever goal they happened to be closest to.
+ */
+export function setVictoryGoal(s: GameState, goal: VictoryGoalId): ActionResult {
+  if (!s.settings.neverEndGame) {
+    return fail('The objective can only be changed in eternal mode');
+  }
+  if (s.settings.victoryGoal === goal) return fail('Already pursuing that objective');
+
+  const previous = VICTORY_INDEX[s.settings.victoryGoal];
+  const next = VICTORY_INDEX[goal];
+  s.settings.victoryGoal = goal;
+
+  push(s, {
+    text: `National objective changed from ${previous?.name ?? 'the previous goal'} to ${next?.name ?? goal}.`,
+    category: 'system',
+    tone: 'neutral',
+    icon: next?.icon ?? '🎯',
+  });
+  return ok(`Now pursuing ${next?.name ?? goal}.`);
 }

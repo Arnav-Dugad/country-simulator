@@ -2,6 +2,7 @@ import type { Achievement } from '../types';
 import { averageRelations, debtToGdp, gdpPerCapita, renewableShare, totalEnergyProduction } from '../selectors';
 import { TECHNOLOGIES } from './technologies';
 
+
 const TIER5 = TECHNOLOGIES.filter((t) => t.tier === 5).map((t) => t.id);
 
 export const ACHIEVEMENTS: Achievement[] = [
@@ -120,6 +121,58 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'phoenix', name: 'Phoenix', icon: '🐦‍🔥', tier: 'platinum', points: 110, hidden: true,
     description: 'Recover from below 15 stability to above 75.',
     check: (s) => s.stability >= 75 && s.history.some((h) => h.stability < 15) },
+
+  /* -------------------------- Second wave ------------------------------- */
+  { id: 'executive-hand', name: 'A Firm Hand', icon: '⚖️', tier: 'bronze', points: 15,
+    description: 'Use five different executive actions.',
+    check: (s) => Object.keys(s.decreeCooldowns).length >= 5 },
+  { id: 'decree-master', name: 'Every Lever Pulled', icon: '🎚️', tier: 'gold', points: 55,
+    description: 'Use twelve different executive actions in one campaign.',
+    check: (s) => Object.keys(s.decreeCooldowns).length >= 12 },
+  { id: 'pacifist', name: 'Not One Shot', icon: '🕊️', tier: 'gold', points: 60,
+    description: 'Govern for forty years without ever going to war.',
+    check: (s) => s.turn >= 480 && s.wars.length === 0 },
+  { id: 'great-leveller', name: 'The Great Leveller', icon: '⚖️', tier: 'gold', points: 55,
+    description: 'Reduce inequality below 20 while keeping GDP per capita above $30,000.',
+    check: (s) => s.economy.inequality < 20 && gdpPerCapita(s) > 30000 },
+  { id: 'open-society', name: 'Open Society', icon: '🔓', tier: 'silver', points: 30,
+    description: 'Reach 95 civil liberties.',
+    check: (s) => s.society.civilLiberties >= 95 },
+  { id: 'fully-renewable', name: 'Nothing Burned', icon: '☀️', tier: 'platinum', points: 95,
+    description: 'Run the grid entirely on zero-carbon sources.',
+    check: (s) => renewableShare(s) >= 99 },
+  { id: 'polymath-state', name: 'Polymath State', icon: '🧠', tier: 'gold', points: 50,
+    description: 'Complete at least six technologies in every branch.',
+    check: (s) => {
+      const counts = new Map<string, number>();
+      for (const id of s.research.completed) {
+        const branch = TECHNOLOGIES.find((t) => t.id === id)?.branch;
+        if (branch) counts.set(branch, (counts.get(branch) ?? 0) + 1);
+      }
+      const branches = new Set(TECHNOLOGIES.map((t) => t.branch));
+      return [...branches].every((b) => (counts.get(b) ?? 0) >= 6);
+    } },
+  { id: 'diplomatic-corps', name: 'Diplomatic Corps', icon: '🤝', tier: 'silver', points: 30,
+    description: 'Sign fifteen treaties.',
+    check: (s) => s.treaties.length >= 15 },
+  { id: 'no-enemies', name: 'Not a Single Enemy', icon: '🌍', tier: 'platinum', points: 90,
+    description: 'Have positive relations with every nation on earth at once.',
+    check: (s) => s.nations.length > 0 && s.nations.every((n) => n.relations > 0) },
+  { id: 'eternal-steward', name: 'The Long Watch', icon: '♾️', tier: 'platinum', points: 100,
+    description: 'Govern for a full century in eternal mode.',
+    check: (s) => s.settings.neverEndGame && s.turn >= 1200 },
+  { id: 'polymath-victor', name: 'Many Roads', icon: '🗺️', tier: 'platinum', points: 130, hidden: true,
+    description: 'Achieve three different victory objectives in a single campaign.',
+    check: (s) => s.victoriesAchieved.length >= 3 },
+  { id: 'debt-free-superpower', name: 'Rich and Armed', icon: '💰', tier: 'gold', points: 60,
+    description: 'Hold military strength above 85 with no public debt at all.',
+    check: (s) => s.military.strength > 85 && s.economy.debt <= 0 },
+  { id: 'centenarian-state', name: 'Long Lives', icon: '🧬', tier: 'gold', points: 55,
+    description: 'Push life expectancy past 90 years.',
+    check: (s) => s.society.lifeExpectancy >= 90 },
+  { id: 'builder', name: 'Master Builder', icon: '🏗️', tier: 'silver', points: 30,
+    description: 'Complete fifty construction projects.',
+    check: (s) => Object.values(s.buildings).reduce((a, b) => a + b, 0) >= 50 },
 ];
 
 export const ACHIEVEMENT_INDEX = Object.fromEntries(

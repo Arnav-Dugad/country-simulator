@@ -11,6 +11,7 @@ const { TECHNOLOGIES, TECH_BRANCHES } = await import('../src/game/data/technolog
 const { BUILDINGS } = await import('../src/game/data/buildings.ts');
 const { EVENTS } = await import('../src/game/data/events.ts');
 const { ACHIEVEMENTS } = await import('../src/game/data/achievements.ts');
+const { DECREES } = await import('../src/game/data/decrees.ts');
 const { ADVISORS, ORGS } = await import('../src/game/data/institutions.ts');
 const { GOVERNMENTS, IDEOLOGIES, TRAITS, DIFFICULTIES, ERAS, VICTORY_GOALS, RESOURCES } =
   await import('../src/game/data/definitions.ts');
@@ -33,6 +34,7 @@ const rows = [
   ['Wonders', BUILDINGS.filter((b) => b.category === 'wonder').length],
   ['Events', EVENTS.length],
   ['Event choices', EVENTS.reduce((s, e) => s + e.choices.length, 0)],
+  ['Executive actions', DECREES.length],
   ['Achievements', ACHIEVEMENTS.length],
   ['Advisors', ADVISORS.length],
   ['Organisations', ORGS.length],

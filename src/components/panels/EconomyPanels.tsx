@@ -6,13 +6,13 @@ import {
 import { Banknote, Coins, Landmark, PiggyBank, TrendingDown, TrendingUp } from 'lucide-react';
 import clsx from 'clsx';
 import type { BudgetDept, GameState, ResourceId, TaxKey } from '../../game/types';
-import { RESOURCES, RESOURCE_INDEX } from '../../game/data/definitions';
+import { RESOURCES } from '../../game/data/definitions';
 import {
   MONTH_SHORT, baselineDeptSpend, computeBudget, debtToGdp, formatBillions, formatMoney,
   gdpPerCapita, totalModifiers,
 } from '../../game/selectors';
 import { frontierPerCapita } from '../../game/engine/tick';
-import { TAX_LIMITS } from '../../game/engine/actions';
+import { BUDGET_MAX, TAX_LIMITS } from '../../game/engine/actions';
 import { useGameStore } from '../../store/gameStore';
 import { Badge, Button, Card, Meter, Reveal, Slider, Stat, Tooltip } from '../ui/primitives';
 import { ChartFrame, chartAxis, chartTooltip } from './chartHelpers';
@@ -321,7 +321,7 @@ export function BudgetPanel({ game }: { game: GameState }) {
                         label={`${meta.icon} ${meta.label}`}
                         value={level}
                         min={0}
-                        max={2}
+                        max={BUDGET_MAX[dept]}
                         step={0.05}
                         onChange={(v) => setBudget(dept, v)}
                         format={(v) => `${(v * 100).toFixed(0)}%`}
@@ -382,4 +382,3 @@ export function BudgetPanel({ game }: { game: GameState }) {
   );
 }
 
-export { RESOURCE_INDEX };

@@ -11,6 +11,7 @@ import { tick } from '../game/engine/tick';
 import { resolveEvent } from '../game/engine/events';
 import { EVENT_INDEX } from '../game/data/events';
 import { useGameStore } from '../store/gameStore';
+import { saveGameLocally } from '../game/storage';
 import { useUiStore, type PanelId } from '../store/uiStore';
 import { GameShell } from '../components/layout/GameShell';
 import { EventModal } from '../components/game/EventModal';
@@ -22,6 +23,8 @@ import { LeaderboardPage } from '../pages/LeaderboardPage';
 import { Dashboard } from '../components/panels/Dashboard';
 import { BudgetPanel, EconomyPanel } from '../components/panels/EconomyPanels';
 import { CabinetPanel, PoliciesPanel, PoliticsPanel, ProvincesPanel } from '../components/panels/GovernancePanels';
+import { DecreesPanel } from '../components/panels/DecreesPanel';
+import { ProfilePage } from '../pages/ProfilePage';
 import { ConstructionPanel, ResearchPanel } from '../components/panels/ProgressPanels';
 import { EnvironmentPanel, SocietyPanel } from '../components/panels/SocietyPanels';
 import { DiplomacyPanel, IntelligencePanel, MilitaryPanel } from '../components/panels/PowerPanels';
@@ -115,6 +118,7 @@ const PANELS: { id: PanelId; label: string; Component: (props: { game: GameState
   { id: 'economy', label: 'Economy', Component: EconomyPanel },
   { id: 'budget', label: 'Treasury', Component: BudgetPanel },
   { id: 'policies', label: 'Policies', Component: PoliciesPanel },
+  { id: 'decrees', label: 'Executive Actions', Component: DecreesPanel },
   { id: 'politics', label: 'Politics', Component: PoliticsPanel },
   { id: 'cabinet', label: 'Cabinet', Component: CabinetPanel },
   { id: 'provinces', label: 'Provinces', Component: ProvincesPanel },
@@ -405,5 +409,75 @@ describe('pages', () => {
     );
     expect(screen.getByText(/Leaderboard unavailable/i)).toBeTruthy();
     expectNoReactErrors('leaderboard page');
+  });
+
+  it('renders the profile page with no campaigns', () => {
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/Backbencher/i), 'starting rank').toBeTruthy();
+    expect(screen.getByText(/No campaigns yet/i)).toBeTruthy();
+    expectNoReactErrors('empty profile page');
+  });
+
+  it('renders the profile page with a career and moves between its tabs', async () => {
+    const user = userEvent.setup();
+    // Seed local storage with two finished campaigns so the career has content.
+    const won = matureGame();
+    won.gameOver = { reason: 'Objective met.', victory: true, turn: won.turn, title: 'Great Power' };
+    saveGameLocally(won);
+
+    const lost = createGame(setupFor('nigeria'), 555);
+    lost.score = 4200;
+    lost.gameOver = { reason: 'Sovereign default.', victory: false, turn: 90, title: 'Bankruptcy' };
+    saveGameLocally(lost);
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>,
+    );
+
+    // Overview shows aggregated career statistics, not a single campaign.
+    expect(screen.getByText(/Career records/i)).toBeTruthy();
+    expect(screen.getByText(/Win rate/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Campaigns/i }));
+    expect(await screen.findByText(/Germany/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Accolades/i }));
+    expect(await screen.findByText(/Victory paths/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Settings/i }));
+    expect(await screen.findByText(/Reduce motion/i)).toBeTruthy();
+
+    expectNoReactErrors('profile page with career');
+  });
+});
+
+describe('executive actions panel', () => {
+  it('enacts a decree through the store and puts it on cooldown', async () => {
+    const user = userEvent.setup();
+    const game = createGame(setupFor('germany'), 4321);
+    game.economy.treasury = 1e9;
+    useGameStore.setState({ game, playing: false });
+
+    const { rerender } = render(<DecreesPanel game={game} />);
+
+    // "Address the Nation" is cheap and available from turn one.
+    expect(screen.getByText('Address the Nation')).toBeTruthy();
+    const buttons = screen.getAllByRole('button', { name: /^Enact$/i });
+    expect(buttons.length).toBeGreaterThan(0);
+    await user.click(buttons[0]);
+
+    const updated = useGameStore.getState().game!;
+    expect(Object.keys(updated.decreeCooldowns).length, 'a decree was recorded').toBeGreaterThan(0);
+
+    rerender(<DecreesPanel game={updated} />);
+    expect(screen.getAllByText(/mo$/).length, 'a cooldown badge appears').toBeGreaterThan(0);
+
+    expectNoReactErrors('decrees panel');
   });
 });

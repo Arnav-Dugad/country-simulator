@@ -23,10 +23,18 @@ import {
   RESOURCE_INDEX,
 } from '../data/definitions';
 import { TECHNOLOGIES } from '../data/technologies';
-import { clamp, computeBudget } from '../selectors';
+import { baselineDeptSpend, clamp, computeBudget } from '../selectors';
+import { BUDGET_MAX } from './actions';
 import { nextRandom, pick, randRange } from './rng';
 
-export const SCHEMA_VERSION = 1;
+/**
+ * Save schema version.
+ *
+ * 1 — initial release.
+ * 2 — adds `settings.neverEndGame` and `victoriesAchieved`.
+ * 3 — adds `decreeCooldowns` for executive actions.
+ */
+export const SCHEMA_VERSION = 3;
 
 /* ------------------------------------------------------------------ */
 /* Province generation                                                 */
@@ -375,6 +383,7 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
       enableWars: config.enableWars,
       enableDisasters: config.enableDisasters,
       ironman: config.ironman,
+      neverEndGame: config.neverEndGame,
       startYear: era.startYear,
       mapSeed: seed >>> 0,
     },
@@ -520,6 +529,7 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
     activeModifiers: [],
     achievements: [],
     eventCooldowns: {},
+    decreeCooldowns: {},
     eventQueue: [],
     chainedEvents: [],
 
@@ -538,6 +548,7 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
     ],
 
     score: 0,
+    victoriesAchieved: [],
     gameOver: null,
     rngSeed: seedState.rngSeed,
   } satisfies GameState;
@@ -580,23 +591,66 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
  * where it goes from there.
  */
 function balanceInheritedBudget(state: GameState): void {
+  const baseline = baselineDeptSpend(state);
+
+  // Defence comes first and is set to whatever sustains the country's actual
+  // military posture — otherwise a heavily armed state like Israel or Russia
+  // would watch its forces decay at "100% funding" through no fault of the
+  // player. The civil departments then share out whatever is left, so a
+  // militarised country genuinely starts with less to spend on everything else.
+  const revenue = computeBudget(state).revenue.total;
+  state.budget.military.level = defenceLevelFor(state, revenue);
+
   const budget = computeBudget(state);
   const fixed =
     budget.expenditure.debtInterest +
     budget.expenditure.advisors +
     budget.expenditure.orgDues +
-    budget.expenditure.resourceImports;
-  const availableForDepartments = budget.revenue.total - fixed;
-  const baselineTotal = budget.expenditure.departmentTotal;
+    budget.expenditure.resourceImports +
+    baseline.military * state.budget.military.level;
 
-  if (baselineTotal <= 0) return;
+  const civilDepts = (Object.keys(state.budget) as (keyof typeof state.budget)[]).filter(
+    (d) => d !== 'military',
+  );
+  const civilBaseline = civilDepts.reduce((sum, d) => sum + baseline[d], 0);
+  if (civilBaseline <= 0) return;
+
   // Aim marginally under balance so there is a little headroom on turn one.
   // The floor means a poor country inherits a real deficit rather than a
   // gutted state — which is both truer to life and more playable.
-  const level = clamp((availableForDepartments / baselineTotal) * 0.97, 0.55, 1.4);
-  for (const dept of Object.keys(state.budget) as (keyof typeof state.budget)[]) {
+  const available = budget.revenue.total - fixed;
+  const level = clamp((available / civilBaseline) * 0.97, 0.55, 1.4);
+  for (const dept of civilDepts) {
     state.budget[dept].level = Math.round(level * 20) / 20;
   }
+}
+
+/** Share of revenue the inherited defence budget is not allowed to exceed. */
+const MAX_INHERITED_DEFENCE_SHARE = 0.28;
+
+/**
+ * Solves the military-strength model for the funding level that holds this
+ * country's starting strength steady. Inverse of the `targetStrength`
+ * calculation in `updateMilitary`.
+ *
+ * Capped at a share of revenue so an over-militarised, low-revenue state does
+ * not start with defence crowding out every civil department — which produced
+ * an unrecoverable collapse in the first months. A country whose forces are
+ * genuinely beyond its means starts under-funding them and watches them
+ * decline, which is the honest outcome.
+ */
+function defenceLevelFor(state: GameState, revenue: number): number {
+  const baselineMilitary = baselineDeptSpend(state).military;
+  if (baselineMilitary <= 0) return 1;
+
+  const required =
+    state.military.strength - 18 - state.military.veterancy * 0.15 + state.corruption * 0.14;
+  const annualDefence = Math.pow(10, required / 22 + 2.2);
+  const postureLevel = annualDefence / (baselineMilitary * 12);
+  const affordableLevel = (revenue * MAX_INHERITED_DEFENCE_SHARE) / baselineMilitary;
+
+  const level = Math.min(postureLevel, affordableLevel);
+  return clamp(Math.round(level * 20) / 20, 0.15, BUDGET_MAX.military);
 }
 
 /** Default setup used by the wizard before the player changes anything. */
@@ -631,6 +685,7 @@ export function defaultSetup(): SetupConfig {
     enableWars: true,
     enableDisasters: true,
     ironman: false,
+    neverEndGame: false,
     primaryColor: '#e5b447',
     secondaryColor: '#4f8cff',
     startingFocus: { economy: 20, military: 20, science: 20, welfare: 20, diplomacy: 20 },

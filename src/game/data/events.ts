@@ -7,7 +7,7 @@ import type { GameEventDef } from '../types';
  * Design rule: no choice is strictly dominant. Every option trades one axis of
  * the state against another, and `riskChance` options gamble on the outcome.
  */
-export const EVENTS: GameEventDef[] = [
+const BASE_EVENTS: GameEventDef[] = [
   /* ================================ ECONOMY ================================ */
   {
     id: 'recession-warning',
@@ -1547,6 +1547,443 @@ export const EVENTS: GameEventDef[] = [
     ],
   },
 ];
+
+/* ================================================================== */
+/* Second wave — added after launch                                    */
+/* ================================================================== */
+
+const EXPANSION_EVENTS: GameEventDef[] = [
+  {
+    id: 'rare-earth-embargo',
+    title: 'Rare Earth Embargo',
+    category: 'diplomacy',
+    severity: 'major',
+    icon: '💎',
+    weight: 8,
+    cooldown: 30,
+    description:
+      'The dominant supplier of processed rare earths has suspended exports to you. Every magnet, motor and guidance system in your industrial base runs on them, and you hold about eleven weeks of stock.',
+    choices: [
+      {
+        id: 'build-processing',
+        label: 'Build a domestic processing industry',
+        description: 'Separation and refining, not just mining. Filthy, expensive, and strategically decisive.',
+        cost: 30000,
+        effects: { emissions: 8, gdpShock: -0.7, approval: -3 },
+        temporaryModifiers: {
+          modifiers: { tradeIncome: 10, research: 6, militaryPower: 5 },
+          months: 999,
+          label: 'Domestic Rare Earth Supply',
+        },
+      },
+      {
+        id: 'diversify-suppliers',
+        label: 'Buy from anyone who will sell',
+        description: 'Pay a premium to secondary suppliers and stockpile aggressively.',
+        cost: 14000,
+        effects: { gdpShock: -0.4, globalRelations: 4, inflation: 0.4 },
+      },
+      {
+        id: 'concede-embargo',
+        label: 'Negotiate on their terms',
+        description: 'Whatever they want, it is cheaper than losing the supply.',
+        effects: { approval: -9, softPower: -10, globalRelations: 6, gdpShock: 0.2 },
+      },
+    ],
+  },
+  {
+    id: 'ai-regulation-crisis',
+    title: 'The Regulation Question',
+    category: 'science',
+    severity: 'major',
+    icon: '⚖️',
+    weight: 9,
+    cooldown: 36,
+    description:
+      'Your national labs have models capable of things nobody legislated for. Industry wants clarity, researchers want freedom, and the public wants someone to be in charge.',
+    conditions: { requiresTech: ['artificial-intelligence'] },
+    choices: [
+      {
+        id: 'strict-regime',
+        label: 'A strict licensing regime',
+        description: 'Pre-deployment approval, audits and liability. Safe, slow, and the labs will complain loudly.',
+        cost: 5000,
+        effects: { civilLiberties: 6, happiness: 4, research: -400, softPower: 8 },
+        temporaryModifiers: { modifiers: { research: -8, stability: 4 }, months: 999, label: 'AI Licensing Regime' },
+      },
+      {
+        id: 'light-touch',
+        label: 'Light-touch, principles-based rules',
+        description: 'Publish expectations, punish harms after the fact, and let the sector run.',
+        cost: 1200,
+        effects: { research: 300, gdpShock: 0.5, happiness: -3 },
+        temporaryModifiers: { modifiers: { research: 10, gdpGrowth: 0.3, civilLiberties: -4 }, months: 999, label: 'Light-Touch AI Rules' },
+        riskChance: 0.3,
+        failureEffects: { approval: -12, stability: -8, happiness: -10, civilLiberties: -10, softPower: -8 },
+      },
+      {
+        id: 'nationalise-ai',
+        label: 'Bring frontier development into the state',
+        description: 'If it is that consequential, it should not be owned by four companies.',
+        cost: 22000,
+        effects: { research: 200, militaryStrength: 6, civilLiberties: -8, softPower: -4 },
+        temporaryModifiers: { modifiers: { research: 6, intelligence: 12, militaryPower: 4 }, months: 999, label: 'State AI Programme' },
+      },
+    ],
+  },
+  {
+    id: 'water-dispute',
+    title: 'Upstream Dam Dispute',
+    category: 'diplomacy',
+    severity: 'major',
+    icon: '💧',
+    weight: 8,
+    cooldown: 36,
+    description:
+      'A neighbour has begun filling a dam on the river that supplies a third of your agriculture. Their engineers say the impact is minimal. Your hydrologists disagree by a factor of four.',
+    choices: [
+      {
+        id: 'negotiate-water',
+        label: 'Negotiate a binding sharing treaty',
+        description: 'Slow, technical, and the only durable answer.',
+        cost: 4000,
+        effects: { globalRelations: 8, softPower: 8, approval: -3 },
+        riskChance: 0.3,
+        failureEffects: { approval: -10, stability: -6, globalRelations: -6, health: -4 },
+      },
+      {
+        id: 'water-infrastructure',
+        label: 'Engineer around the problem',
+        description: 'Desalination, drip irrigation and aquifer recharge. Expensive independence.',
+        cost: 26000,
+        effects: { health: 6, stability: 4, approval: 2 },
+        temporaryModifiers: { modifiers: { health: 4, stability: 3 }, months: 999, label: 'Water Independence' },
+      },
+      {
+        id: 'threaten-water',
+        label: 'Threaten force',
+        description: 'Move units to the border and say plainly what happens if the gates stay shut.',
+        effects: { approval: 8, globalRelations: -18, softPower: -12, stability: -3 },
+        riskChance: 0.4,
+        failureEffects: { approval: -12, globalRelations: -28, militaryStrength: -6, stability: -10 },
+      },
+    ],
+  },
+  {
+    id: 'central-bank-clash',
+    title: 'Clash with the Central Bank',
+    category: 'economy',
+    severity: 'major',
+    icon: '🏦',
+    weight: 9,
+    cooldown: 30,
+    description:
+      'The governor has raised rates again, against your explicit public request. Mortgage holders are furious and your finance minister wants the governor gone.',
+    choices: [
+      {
+        id: 'respect-independence',
+        label: 'Publicly back the bank’s independence',
+        description: 'Take the political pain and protect an institution worth more than one rate decision.',
+        effects: { approval: -7, stability: 4, inflation: -0.8 },
+        temporaryModifiers: { modifiers: { inflation: -0.4, taxEfficiency: 5 }, months: 36, label: 'Central Bank Credibility' },
+      },
+      {
+        id: 'pressure-bank',
+        label: 'Apply pressure behind the scenes',
+        description: 'Briefings, a pointed letter, and a reminder about who appoints the board.',
+        effects: { approval: 4, inflation: 0.6, stability: -3, corruption: 3 },
+        riskChance: 0.35,
+        failureEffects: { approval: -10, inflation: 2.2, stability: -8, corruption: 8 },
+      },
+      {
+        id: 'replace-governor',
+        label: 'Replace the governor',
+        description: 'Assert democratic control over monetary policy. Markets will price the change immediately.',
+        effects: { approval: 6, inflation: 1.6, stability: -6, corruption: 5 },
+        temporaryModifiers: { modifiers: { inflation: 0.8, taxEfficiency: -8 }, months: 48, label: 'Politicised Monetary Policy' },
+      },
+    ],
+  },
+  {
+    id: 'election-interference',
+    title: 'Foreign Election Interference',
+    category: 'politics',
+    severity: 'major',
+    icon: '🎭',
+    weight: 8,
+    cooldown: 36,
+    description:
+      'Your intelligence service has documented a coordinated foreign campaign — synthetic video, purchased influencers, leaked correspondence — aimed at the coming election.',
+    conditions: { government: ['democracy', 'republic', 'federal-republic', 'constitutional-monarchy', 'direct-democracy'] },
+    choices: [
+      {
+        id: 'publish-evidence',
+        label: 'Publish the evidence in full',
+        description: 'Show the country exactly what was done and by whom. Transparency as a defence.',
+        effects: { civilLiberties: 6, softPower: 10, stability: -4, globalRelations: -12, approval: 3 },
+      },
+      {
+        id: 'counter-quietly',
+        label: 'Counter it quietly',
+        description: 'Take the networks down without telling anyone it happened.',
+        cost: 6000,
+        effects: { intelligence: 8, stability: 3, civilLiberties: -4 },
+        riskChance: 0.3,
+        failureEffects: { approval: -14, stability: -10, civilLiberties: -12, softPower: -10 },
+      },
+      {
+        id: 'emergency-powers-election',
+        label: 'Restrict political advertising and platforms',
+        description: 'Emergency rules on speech during the campaign period.',
+        cost: 2000,
+        effects: { stability: 6, civilLiberties: -16, approval: -6, softPower: -8 },
+      },
+    ],
+  },
+  {
+    id: 'pension-crunch',
+    title: 'The Pension Arithmetic',
+    category: 'society',
+    severity: 'major',
+    icon: '👴',
+    weight: 9,
+    cooldown: 40,
+    description:
+      'The actuaries have delivered their report. On current trends the state pension is unfunded within twenty-two years. Every option is unpopular with someone who votes.',
+    conditions: { minGdpPerCapita: 8000 },
+    choices: [
+      {
+        id: 'raise-retirement-age',
+        label: 'Raise the retirement age',
+        description: 'Two years now, indexed to life expectancy thereafter. Arithmetically sound, politically radioactive.',
+        effects: { approval: -14, happiness: -8, unemployment: 0.5, stability: -4 },
+        temporaryModifiers: { modifiers: { taxEfficiency: 6, gdpGrowth: 0.2 }, months: 999, label: 'Sustainable Pensions' },
+      },
+      {
+        id: 'raise-contributions',
+        label: 'Raise contributions',
+        description: 'Spread the cost across everyone still working.',
+        effects: { approval: -8, inequality: -3 },
+        temporaryModifiers: { modifiers: { taxEfficiency: 4, happiness: -2 }, months: 999, label: 'Higher Contributions' },
+      },
+      {
+        id: 'defer-pensions',
+        label: 'Leave it to your successor',
+        description: 'The cliff is twenty-two years away and you will not be here.',
+        effects: { approval: 4 },
+        temporaryModifiers: { modifiers: { taxEfficiency: -6, stability: -2 }, months: 999, label: 'Unfunded Pension Liability' },
+      },
+    ],
+  },
+  {
+    id: 'sporting-scandal',
+    title: 'Doping Scandal',
+    category: 'society',
+    severity: 'minor',
+    icon: '🏅',
+    weight: 9,
+    cooldown: 30,
+    description:
+      'A systematic doping programme in your national athletics setup has been exposed. The evidence suggests officials knew.',
+    choices: [
+      {
+        id: 'full-cooperation',
+        label: 'Cooperate fully with the investigation',
+        description: 'Hand over everything, ban those responsible, accept the sanction.',
+        cost: 1600,
+        effects: { softPower: 6, corruption: -5, happiness: -4, approval: -3 },
+      },
+      {
+        id: 'limited-hangout',
+        label: 'Blame a handful of individuals',
+        description: 'Sacrifice the coaches, protect the federation.',
+        effects: { softPower: -6, corruption: 4, approval: 2 },
+        riskChance: 0.45,
+        failureEffects: { softPower: -18, corruption: 10, approval: -8 },
+      },
+      {
+        id: 'deny-doping',
+        label: 'Deny everything and allege a conspiracy',
+        description: 'Frame it as an attack on the nation itself.',
+        effects: { approval: 5, softPower: -16, globalRelations: -8, corruption: 6 },
+      },
+    ],
+  },
+  {
+    id: 'arctic-route',
+    title: 'The Northern Route Opens',
+    category: 'opportunity',
+    severity: 'major',
+    icon: '🧊',
+    weight: 6,
+    cooldown: 60,
+    description:
+      'Ice retreat has opened a shipping lane that cuts two weeks off the Asia–Europe run. The commercial opportunity is enormous and the reason for it is not.',
+    conditions: { minYear: 2020 },
+    choices: [
+      {
+        id: 'invest-arctic',
+        label: 'Invest in ports and icebreakers',
+        description: 'Position yourself on the route before anyone else does.',
+        cost: 22000,
+        effects: { infrastructure: 6, emissions: 5, approval: 3 },
+        temporaryModifiers: { modifiers: { tradeIncome: 18, infrastructure: 4 }, months: 999, label: 'Northern Route Hub' },
+      },
+      {
+        id: 'regulate-arctic',
+        label: 'Push for an international protection regime',
+        description: 'Lead the effort to keep it restricted. Forgo the revenue, gain the standing.',
+        cost: 4000,
+        effects: { softPower: 18, globalRelations: 12, emissions: -3, approval: -5 },
+      },
+      {
+        id: 'ignore-arctic',
+        label: 'Stay out of it',
+        description: 'Let others take both the profit and the blame.',
+        effects: { approval: 1 },
+      },
+    ],
+  },
+  {
+    id: 'antibiotic-resistance',
+    title: 'Resistant Outbreak',
+    category: 'health',
+    severity: 'major',
+    icon: '🧫',
+    weight: 7,
+    cooldown: 48,
+    description:
+      'A pan-resistant bacterial strain has established itself in three teaching hospitals. Standard treatment does nothing. The infection control failures were documented and ignored two years ago.',
+    choices: [
+      {
+        id: 'crash-programme',
+        label: 'Fund a crash antibiotic programme',
+        description: 'Guaranteed purchase agreements to make novel antibiotics commercially viable again.',
+        cost: 19000,
+        effects: { health: 10, research: 400, approval: 4, population: -8000 },
+        temporaryModifiers: { modifiers: { health: 6, research: 4 }, months: 999, label: 'Antimicrobial Pipeline' },
+      },
+      {
+        id: 'infection-control',
+        label: 'Overhaul infection control',
+        description: 'Staffing, isolation capacity, and a ban on agricultural prophylactic use.',
+        cost: 8000,
+        effects: { health: 6, population: -20000, gdpShock: -0.3, approval: -2 },
+      },
+      {
+        id: 'contain-quietly',
+        label: 'Contain it without announcing it',
+        description: 'Avoid the panic, avoid the tourism collapse, hope it holds.',
+        cost: 2500,
+        effects: { population: -45000, health: -6, approval: 2 },
+        riskChance: 0.5,
+        failureEffects: { population: -240000, health: -18, approval: -20, stability: -10, softPower: -14 },
+      },
+    ],
+  },
+  {
+    id: 'sovereign-tech-stack',
+    title: 'Digital Sovereignty Debate',
+    category: 'science',
+    severity: 'minor',
+    icon: '🖥️',
+    weight: 9,
+    cooldown: 30,
+    description:
+      'Every government department runs on foreign cloud infrastructure. A leaked memo shows a foreign agency can compel access to it. Your chief technology officer has drafted three options.',
+    conditions: { requiresTech: ['e-governance'] },
+    choices: [
+      {
+        id: 'sovereign-cloud',
+        label: 'Build a sovereign cloud',
+        description: 'Domestic data centres, domestic operators, domestic law. Expensive and slower to build.',
+        cost: 24000,
+        effects: { intelligence: 10, research: 4, gdpShock: -0.3 },
+        temporaryModifiers: { modifiers: { intelligence: 10, spendingEfficiency: -3, research: 4 }, months: 999, label: 'Sovereign Cloud' },
+      },
+      {
+        id: 'encrypt-everything',
+        label: 'Encrypt everything instead',
+        description: 'Keep the foreign infrastructure but make it useless to whoever compels it.',
+        cost: 6000,
+        effects: { intelligence: 6, civilLiberties: 5, research: 2 },
+      },
+      {
+        id: 'accept-dependency',
+        label: 'Accept the dependency',
+        description: 'It works, it is cheap, and the alternative costs twenty-four billion.',
+        effects: { intelligence: -6, softPower: -3 },
+      },
+    ],
+  },
+  {
+    id: 'megaproject-overrun',
+    title: 'Megaproject Overrun',
+    category: 'economy',
+    severity: 'major',
+    icon: '🏗️',
+    weight: 9,
+    cooldown: 26,
+    description:
+      'The flagship infrastructure project is four years late and at 240% of budget. The contractor says the specification changed. The auditor says the specification never existed.',
+    conditions: { minStability: 25 },
+    choices: [
+      {
+        id: 'finish-it',
+        label: 'Fund it to completion',
+        description: 'Sunk cost is not an argument, but a half-built tunnel is not an asset either.',
+        cost: 24000,
+        effects: { infrastructure: 8, approval: -6, corruption: 2 },
+      },
+      {
+        id: 'cancel-project',
+        label: 'Cancel it and eat the loss',
+        description: 'Stop digging. Take the write-off and the headlines.',
+        effects: { approval: -10, stability: -3, infrastructure: -3, corruption: -4, unemployment: 0.4 },
+      },
+      {
+        id: 'prosecute-contractor',
+        label: 'Prosecute the contractor and renegotiate',
+        description: 'Go after them for the overrun while keeping the project alive.',
+        cost: 12000,
+        effects: { corruption: -8, approval: 4, infrastructure: 4 },
+        riskChance: 0.35,
+        failureEffects: { treasury: -8000, approval: -8, infrastructure: -4, corruption: 4 },
+      },
+    ],
+  },
+  {
+    id: 'diaspora-return',
+    title: 'The Diaspora Comes Home',
+    category: 'opportunity',
+    severity: 'minor',
+    icon: '✈️',
+    weight: 8,
+    cooldown: 36,
+    description:
+      'For the first time in three decades more citizens returned than left. They bring capital, contacts and expectations about how a country should be run.',
+    conditions: { minStability: 50 },
+    choices: [
+      {
+        id: 'returnee-incentives',
+        label: 'Build a returnee programme',
+        description: 'Tax treatment, credential recognition and startup capital.',
+        cost: 7000,
+        effects: { research: 300, gdpShock: 0.5, approval: 3 },
+        temporaryModifiers: { modifiers: { migration: 20, research: 8, gdpGrowth: 0.3 }, months: 999, label: 'Return Migration Wave' },
+      },
+      {
+        id: 'let-them-come',
+        label: 'Let it happen naturally',
+        description: 'No programme, no cost, no acceleration.',
+        effects: { gdpShock: 0.2, research: 100 },
+      },
+    ],
+  },
+];
+
+/** Every event in the game. The engine draws its random pool from this. */
+export const EVENTS: GameEventDef[] = [...BASE_EVENTS, ...EXPANSION_EVENTS];
 
 export const EVENT_INDEX = Object.fromEntries(EVENTS.map((e) => [e.id, e])) as Record<
   string,

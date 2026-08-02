@@ -1022,10 +1022,16 @@ function VictoryStep({ config, patch }: StepProps) {
 /* --------------------------------- Rules --------------------------- */
 
 function RulesStep({ config, patch }: StepProps) {
-  const toggles: { key: 'enableWars' | 'enableDisasters' | 'ironman'; label: string; hint: string }[] = [
-    { key: 'enableWars', label: 'Armed conflict', hint: 'Allows wars, border incidents and military events. Turn off for a purely civilian campaign.' },
-    { key: 'enableDisasters', label: 'Natural disasters', hint: 'Earthquakes, storms, droughts, wildfires and pandemics.' },
-    { key: 'ironman', label: 'Ironman', hint: 'One save slot, no reloading. Your decisions are final.' },
+  const toggles: {
+    key: 'enableWars' | 'enableDisasters' | 'ironman' | 'neverEndGame';
+    label: string;
+    hint: string;
+    icon: string;
+  }[] = [
+    { key: 'enableWars', icon: '⚔️', label: 'Armed conflict', hint: 'Allows wars, border incidents and military events. Turn off for a purely civilian campaign.' },
+    { key: 'enableDisasters', icon: '🌪️', label: 'Natural disasters', hint: 'Earthquakes, storms, droughts, wildfires and pandemics.' },
+    { key: 'neverEndGame', icon: '♾️', label: 'Eternal mode', hint: 'The campaign never ends. Bankruptcy, collapse, losing an election and the hundred-year limit all stop being fatal — you keep governing through anything. Objectives still count when you reach them.' },
+    { key: 'ironman', icon: '🔒', label: 'Ironman', hint: 'One save slot, no reloading. Your decisions are final.' },
   ];
 
   const frequencies: { id: SetupConfig['eventFrequency']; label: string; hint: string }[] = [
@@ -1071,12 +1077,28 @@ function RulesStep({ config, patch }: StepProps) {
                   />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-xs font-semibold text-white">{t.label}</span>
+                  <span className="block text-xs font-semibold text-white">
+                    {t.icon} {t.label}
+                  </span>
                   <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-400">{t.hint}</span>
                 </span>
               </button>
             ))}
           </div>
+
+          {config.neverEndGame && (
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-3 rounded-xl border border-aurora-violet/30 bg-aurora-violet/[0.07] p-3"
+            >
+              <p className="text-xs font-semibold text-aurora-violet">♾️ Eternal mode is on</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                Nothing can end this campaign. Losing an election leaves you in office as a caretaker with a
+                badly damaged mandate rather than removing you. Play as long as you like.
+              </p>
+            </motion.div>
+          )}
         </Card>
       </div>
     </div>
@@ -1111,6 +1133,7 @@ function ReviewStep({ config }: StepProps) {
     ['Rules', [
       config.enableWars ? 'wars on' : 'wars off',
       config.enableDisasters ? 'disasters on' : 'disasters off',
+      config.neverEndGame ? 'eternal mode' : 'normal endings',
       config.ironman ? 'ironman' : 'normal saves',
     ].join(' · ')],
   ];

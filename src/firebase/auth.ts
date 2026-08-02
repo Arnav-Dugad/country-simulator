@@ -106,6 +106,14 @@ export async function logOut(): Promise<void> {
   await signOut(auth);
 }
 
+/** Renames the signed-in user. Their leaderboard entries keep the old name. */
+export async function updateDisplayName(displayName: string): Promise<void> {
+  const instance = requireAuth();
+  const current = instance.currentUser;
+  if (!current) throw new Error('You are not signed in.');
+  await updateProfile(current, { displayName: displayName.trim().slice(0, 32) });
+}
+
 /** Subscribes to auth changes. Returns a no-op unsubscribe when offline. */
 export function watchAuth(callback: (user: AuthUser | null) => void): () => void {
   if (!isFirebaseReady() || !auth) {

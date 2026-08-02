@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { DifficultyId, GameState, SetupConfig } from '../types';
 import { COUNTRIES, getCountry } from '../data/countries';
-import { createGame, defaultSetup } from '../engine/createGame';
+import { SCHEMA_VERSION, createGame, defaultSetup } from '../engine/createGame';
+import { migrate } from '../storage';
 import { tick } from '../engine/tick';
 import { resolveEvent } from '../engine/events';
 import { EVENT_INDEX } from '../data/events';
 import { POLICIES } from '../data/policies';
 import { TECHNOLOGIES } from '../data/technologies';
 import { BUILDINGS } from '../data/buildings';
+import { DECREES, DECREE_INDEX } from '../data/decrees';
 import {
   computeBudget,
   gdpPerCapita,
@@ -15,10 +17,13 @@ import {
   totalEnergyProduction,
   totalModifiers,
 } from '../selectors';
-import { computeScore, victoryProgress } from '../engine/scoring';
+import { MINIMUM_VICTORY_MONTHS, computeScore, victoryProgress } from '../engine/scoring';
 import {
+  BUDGET_MAX,
   buildAvailability,
+  decreeAvailability,
   declareWar,
+  enactDecree,
   enactPolicy,
   issueBonds,
   joinOrg,
@@ -28,6 +33,7 @@ import {
   repayDebt,
   setBudget,
   setTax,
+  setVictoryGoal,
   startConstruction,
   startResearch,
 } from '../engine/actions';
@@ -192,8 +198,19 @@ describe('long-run simulation', () => {
       // stated reason — it must never simply stop advancing.
       if (s.gameOver) expect(s.gameOver.reason.length).toBeGreaterThan(10);
       else expect(s.turn).toBe(600);
-      // Doing nothing at all should never be a fast loss.
-      expect(s.turn, 'a hands-off campaign should last at least a decade').toBeGreaterThan(120);
+
+      // Doing nothing must never be an *instant* loss anywhere.
+      expect(s.turn, 'no country should collapse within three years of inaction').toBeGreaterThan(36);
+
+      // On a country that is not a deliberately punishing start, inaction
+      // should still buy at least a decade. Venezuela, Lebanon and the like
+      // begin with a state that cannot collect enough revenue to fund itself,
+      // and are meant to demand action almost immediately.
+      const profile = getCountry(id)!;
+      const punishingStart = profile.stability < 40 || profile.corruption > 80;
+      if (!punishingStart) {
+        expect(s.turn, `${id} should survive a decade of inaction`).toBeGreaterThan(120);
+      }
     });
   }
 
@@ -253,6 +270,233 @@ describe('long-run simulation', () => {
     }
     expect(s.gameOver, 'the campaign should end').not.toBeNull();
     assertInvariants(s, 'lebanon/collapse');
+  });
+});
+
+describe('eternal mode', () => {
+  it('never ends, even under the mismanagement that bankrupts a normal campaign', () => {
+    const s = createGame(setupFor('lebanon', { difficulty: 'brutal', neverEndGame: true }), 11);
+    for (const key of Object.keys(s.taxes) as (keyof typeof s.taxes)[]) setTax(s, key, 0);
+    for (const dept of Object.keys(s.budget) as (keyof typeof s.budget)[]) setBudget(s, dept, 2);
+
+    for (let i = 0; i < 900; i++) {
+      autoResolve(s);
+      tick(s);
+    }
+
+    expect(s.gameOver, 'eternal mode must never end the campaign').toBeNull();
+    expect(s.turn, 'time must keep advancing').toBe(900);
+    assertInvariants(s, 'lebanon/eternal');
+  });
+
+  it('runs past the century cap that ends a normal campaign', () => {
+    const eternal = createGame(setupFor('norway', { neverEndGame: true, victoryGoal: 'survival' }), 5);
+    for (let i = 0; i < 1300; i++) {
+      autoResolve(eternal);
+      tick(eternal);
+    }
+    expect(eternal.gameOver).toBeNull();
+    expect(eternal.turn).toBe(1300);
+    assertInvariants(eternal, 'norway/eternal-century');
+  });
+
+  /** Forces a state that satisfies every superpower condition. */
+  function makeSuperpower(overrides: Partial<SetupConfig>): GameState {
+    const s = createGame(setupFor('usa', { victoryGoal: 'superpower', ...overrides }), 21);
+    s.turn = MINIMUM_VICTORY_MONTHS + 1;
+    s.military.strength = 96;
+    s.stability = 80;
+    s.society.softPower = 85;
+    for (const n of s.nations) {
+      n.relations = 60;
+      n.militaryStrength = Math.min(n.militaryStrength, 70);
+    }
+    // A decisive economic lead over the largest rival.
+    s.economy.gdp = s.nations.reduce((max, n) => Math.max(max, n.gdp), 1) * 2;
+    return s;
+  }
+
+  it('records a victory without ending the run, and only once', () => {
+    const s = makeSuperpower({ neverEndGame: true });
+    expect(victoryProgress(s).every((p) => p.met), 'test fixture must satisfy the goal').toBe(true);
+
+    for (let i = 0; i < 40; i++) {
+      autoResolve(s);
+      tick(s);
+    }
+
+    expect(s.victoriesAchieved, 'the objective should be recorded').toContain('superpower');
+    expect(s.gameOver, 'recording a victory must not end eternal mode').toBeNull();
+    expect(
+      s.victoriesAchieved.filter((v) => v === 'superpower').length,
+      'a goal must only be recorded once',
+    ).toBe(1);
+  });
+
+  it('ends a normal campaign on the same victory it merely records in eternal mode', () => {
+    const normal = makeSuperpower({ neverEndGame: false });
+    for (let i = 0; i < 40 && !normal.gameOver; i++) {
+      autoResolve(normal);
+      tick(normal);
+    }
+    expect(normal.gameOver?.victory).toBe(true);
+    expect(normal.victoriesAchieved).toContain('superpower');
+  });
+
+  it('keeps the player in office after a lost election, with real penalties', () => {
+    const s = createGame(setupFor('brazil', { neverEndGame: true }), 77);
+    // Force a loss: the player's party is wiped out, a rival dominates.
+    const playerParty = s.parties.find((p) => p.id === `party-${s.leader.ideology}`)!;
+    const rival = s.parties.find((p) => p.id !== playerParty.id)!;
+    playerParty.support = 1;
+    rival.support = 80;
+    s.monthsToElection = 1;
+    s.approval = 60;
+    s.stability = 70;
+    const termsBefore = s.termsServed;
+
+    tick(s);
+
+    expect(s.gameOver, 'a lost election must not end an eternal campaign').toBeNull();
+    expect(s.termsServed, 'a lost election does not grant a new term').toBe(termsBefore);
+    expect(s.approval, 'losing must cost approval').toBeLessThan(60);
+    expect(s.stability, 'losing must cost stability').toBeLessThan(70);
+    expect(s.monthsToElection, 'a new election must be scheduled').toBeGreaterThan(0);
+  });
+
+  it('still ends a normal campaign on a lost election', () => {
+    const s = createGame(setupFor('brazil', { neverEndGame: false }), 77);
+    const playerParty = s.parties.find((p) => p.id === `party-${s.leader.ideology}`)!;
+    const rival = s.parties.find((p) => p.id !== playerParty.id)!;
+    playerParty.support = 1;
+    rival.support = 80;
+    s.monthsToElection = 1;
+
+    tick(s);
+
+    expect(s.gameOver?.title).toBe('Voted Out');
+  });
+
+  it('only allows the objective to be changed in eternal mode', () => {
+    const eternal = createGame(setupFor('india', { neverEndGame: true, victoryGoal: 'superpower' }), 4);
+    expect(setVictoryGoal(eternal, 'green').ok).toBe(true);
+    expect(eternal.settings.victoryGoal).toBe('green');
+    expect(setVictoryGoal(eternal, 'green').ok, 'no-op switches are rejected').toBe(false);
+
+    const normal = createGame(setupFor('india', { neverEndGame: false, victoryGoal: 'superpower' }), 4);
+    expect(setVictoryGoal(normal, 'green').ok).toBe(false);
+    expect(normal.settings.victoryGoal).toBe('superpower');
+  });
+});
+
+describe('executive actions', () => {
+  it('enacts every decree whose conditions can be met, and respects cooldowns', () => {
+    const s = createGame(setupFor('germany'), 12);
+    s.economy.treasury = 1e9;
+    s.research.completed = TECHNOLOGIES.map((t) => t.id);
+
+    let enacted = 0;
+    for (const decree of DECREES) {
+      const availability = decreeAvailability(s, decree.id);
+      if (!availability.enabled) continue;
+
+      const result = enactDecree(s, decree.id);
+      expect(result.ok, `${decree.id}: ${result.message}`).toBe(true);
+      enacted++;
+
+      // Immediately unavailable again — the cooldown must bite.
+      const after = decreeAvailability(s, decree.id);
+      expect(after.enabled, `${decree.id} should be on cooldown`).toBe(false);
+      expect(after.cooldownRemaining).toBeGreaterThan(0);
+      expect(enactDecree(s, decree.id).ok, `${decree.id} must not be repeatable`).toBe(false);
+    }
+
+    expect(enacted, 'most decrees should be reachable').toBeGreaterThan(DECREES.length * 0.6);
+    assertInvariants(s, 'germany/all-decrees');
+  });
+
+  it('lets a decree be used again once its cooldown expires', () => {
+    const s = createGame(setupFor('japan'), 13);
+    s.economy.treasury = 1e9;
+
+    expect(enactDecree(s, 'national-address').ok).toBe(true);
+    const cooldown = DECREE_INDEX['national-address'].cooldown;
+
+    for (let i = 0; i < cooldown - 1; i++) { autoResolve(s); tick(s); }
+    expect(decreeAvailability(s, 'national-address').enabled, 'still cooling down').toBe(false);
+
+    autoResolve(s);
+    tick(s);
+    s.economy.treasury = 1e9;
+    expect(decreeAvailability(s, 'national-address').enabled, 'cooldown has expired').toBe(true);
+  });
+
+  it('applies the bespoke side effects that plain effect blocks cannot express', () => {
+    const s = createGame(setupFor('brazil'), 14);
+    s.economy.treasury = 1e9;
+    s.economy.debt = 1000;
+    s.economy.creditRating = 80;
+
+    expect(enactDecree(s, 'debt-restructuring').ok).toBe(true);
+    expect(s.economy.debt, 'creditors take a haircut').toBeCloseTo(800, 3);
+    expect(s.economy.creditRating, 'the rating takes the hit').toBeLessThan(80);
+
+    const readinessBefore = s.military.readiness;
+    expect(enactDecree(s, 'mobilise-reserves').ok).toBe(true);
+    expect(s.military.readiness).toBeGreaterThan(readinessBefore);
+  });
+
+  it('refuses a decree the treasury cannot cover', () => {
+    const s = createGame(setupFor('fiji'), 15);
+    s.economy.treasury = 0;
+    const availability = decreeAvailability(s, 'emergency-stimulus');
+    expect(availability.enabled).toBe(false);
+    expect(availability.reason).toMatch(/treasury/i);
+    expect(enactDecree(s, 'emergency-stimulus').ok).toBe(false);
+  });
+
+  it('keeps the state sound when decrees are used constantly for fifty years', () => {
+    const s = createGame(setupFor('india', { neverEndGame: true }), 16);
+    for (let i = 0; i < 600; i++) {
+      autoResolve(s);
+      // Fire anything that is ready, every single month.
+      for (const decree of DECREES) {
+        if (decreeAvailability(s, decree.id).enabled) enactDecree(s, decree.id);
+      }
+      tick(s);
+    }
+    assertInvariants(s, 'india/decree-spam');
+    expect(s.turn).toBe(600);
+  });
+});
+
+describe('save migration', () => {
+  it('upgrades a v1 save and preserves it', () => {
+    const s = createGame(setupFor('france'), 8);
+    for (let i = 0; i < 24; i++) { autoResolve(s); tick(s); }
+
+    // Simulate a save written before eternal mode existed: the two v2 fields
+    // simply are not present on the parsed object.
+    const legacy = JSON.parse(JSON.stringify(s)) as Record<string, unknown>;
+    legacy.version = 1;
+    delete legacy.victoriesAchieved;
+    delete (legacy.settings as Record<string, unknown>).neverEndGame;
+
+    const migrated = migrate(legacy as unknown as GameState);
+    expect(migrated.version).toBe(SCHEMA_VERSION);
+    expect(migrated.victoriesAchieved).toEqual([]);
+    expect(migrated.settings.neverEndGame).toBe(false);
+    expect(migrated.turn, 'migration must not lose progress').toBe(s.turn);
+
+    // And it must still simulate.
+    for (let i = 0; i < 24; i++) { autoResolve(migrated); tick(migrated); }
+    assertInvariants(migrated, 'migrated save');
+  });
+
+  it('refuses a save from a newer build', () => {
+    const s = createGame(setupFor('france'), 8);
+    s.version = SCHEMA_VERSION + 1;
+    expect(() => migrate(s)).toThrow(/newer version/i);
   });
 });
 
@@ -356,12 +600,19 @@ describe('player actions', () => {
     expect(s.economy.debt).toBeGreaterThanOrEqual(0);
   });
 
-  it('clamps budget levels', () => {
+  it('clamps budget levels to each department’s own ceiling', () => {
     const s = createGame(setupFor('france'), 6);
-    setBudget(s, 'military', 5);
-    expect(s.budget.military.level).toBe(2);
+
+    // Defence has a wider ceiling than the civil departments, because the real
+    // spread in defence spending between countries is far wider.
+    setBudget(s, 'military', 99);
+    expect(s.budget.military.level).toBe(BUDGET_MAX.military);
     setBudget(s, 'military', -3);
     expect(s.budget.military.level).toBe(0);
+
+    setBudget(s, 'healthcare', 99);
+    expect(s.budget.healthcare.level).toBe(BUDGET_MAX.healthcare);
+    expect(BUDGET_MAX.healthcare).toBeLessThan(BUDGET_MAX.military);
   });
 
   it('runs diplomacy, treaties, orgs, covert ops and war end-to-end', () => {

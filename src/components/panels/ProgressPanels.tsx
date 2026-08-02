@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Beaker, Check, Hammer, Lock, Search, X, Zap } from 'lucide-react';
+import { Beaker, Check, Hammer, Lock, Search, X } from 'lucide-react';
 import clsx from 'clsx';
 import type { BuildingCategory, GameState, TechBranch } from '../../game/types';
 import {
@@ -344,4 +344,3 @@ export function ConstructionPanel({ game }: { game: GameState }) {
   );
 }
 
-export { Zap };

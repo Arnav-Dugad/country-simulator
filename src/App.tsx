@@ -10,6 +10,7 @@ import { AuthPage } from './pages/AuthPage';
 import { SetupPage } from './pages/SetupPage';
 import { GamePage } from './pages/GamePage';
 import { LeaderboardPage } from './pages/LeaderboardPage';
+import { ProfilePage } from './pages/ProfilePage';
 
 export default function App() {
   const init = useAuthStore((s) => s.init);
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="/new" element={<SetupPage />} />
           <Route path="/play" element={<GamePage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <Toasts />

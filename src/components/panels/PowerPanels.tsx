@@ -5,7 +5,7 @@ import {
 import { Ban, Handshake, Radar as RadarIcon, Search, Send, Shield, Swords, Target } from 'lucide-react';
 import clsx from 'clsx';
 import type { CovertOp, ForeignNation, GameState, MilitaryState, OrgId, TreatyType, WarGoal } from '../../game/types';
-import { ORGS, ORG_INDEX } from '../../game/data/institutions';
+import { ORGS } from '../../game/data/institutions';
 import { REGION_LABELS } from '../../game/data/countries';
 import { averageRelations, formatBillions, formatMoney, formatNumber, formatPopulation } from '../../game/selectors';
 import { COVERT_OPS, orgEligibility } from '../../game/engine/actions';
@@ -686,4 +686,3 @@ export function IntelligencePanel({ game }: { game: GameState }) {
   );
 }
 
-export { ORG_INDEX };

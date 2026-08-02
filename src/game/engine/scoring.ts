@@ -142,14 +142,28 @@ export function victoryProgress(s: GameState): VictoryProgress[] {
   );
 
   switch (s.settings.victoryGoal) {
-    case 'superpower':
+    case 'superpower': {
+      // Measured against the actual world, so the bar rises as rivals grow —
+      // and so an already-dominant nation has to *extend* its lead rather than
+      // win on day one for doing nothing.
+      const rivalGdp = s.nations.reduce((max, n) => Math.max(max, n.gdp), 1);
+      const rivalMilitary = s.nations.reduce((max, n) => Math.max(max, n.militaryStrength), 0);
+      const gdpLead = s.economy.gdp / rivalGdp;
       return [
         tenure,
         p('Military strength', s.military.strength, 90, `${s.military.strength.toFixed(0)} / 90`),
-        p('GDP', s.economy.gdp, 8000, `$${(s.economy.gdp / 1000).toFixed(2)}T / $8T`),
-        p('Average relations', averageRelations(s) + 100, 120, `${averageRelations(s).toFixed(0)} / 20`),
-        p('Stability', s.stability, 60, `${s.stability.toFixed(0)} / 60`),
+        p(
+          'Strongest military on earth',
+          s.military.strength > rivalMilitary ? 1 : 0,
+          1,
+          `${s.military.strength.toFixed(0)} vs best rival ${rivalMilitary.toFixed(0)}`,
+        ),
+        p('Economic lead', gdpLead, 1.5, `${gdpLead.toFixed(2)}× / 1.50× largest rival`),
+        p('Average relations', averageRelations(s) + 100, 125, `${averageRelations(s).toFixed(0)} / 25`),
+        p('Soft power', s.society.softPower, 60, `${s.society.softPower.toFixed(0)} / 60`),
+        p('Stability', s.stability, 65, `${s.stability.toFixed(0)} / 65`),
       ];
+    }
     case 'utopia':
       return [
         tenure,

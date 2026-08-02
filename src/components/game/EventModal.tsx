@@ -2,13 +2,14 @@ import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, ChevronRight, Dices } from 'lucide-react';
 import clsx from 'clsx';
-import type { EventChoice, EventEffects, GameState } from '../../game/types';
+import type { EventChoice, GameState } from '../../game/types';
 import { EVENT_INDEX } from '../../game/data/events';
 import { costScale, formatMoney } from '../../game/selectors';
 import { choiceAvailable } from '../../game/engine/events';
 import { useGameStore } from '../../store/gameStore';
 import { Badge, Button, Modal, Tooltip } from '../ui/primitives';
 import { ModifierList } from '../panels/ModifierList';
+import { EffectChips } from '../panels/EffectChips';
 
 const SEVERITY: Record<string, { label: string; tone: 'neutral' | 'info' | 'warn' | 'bad'; ring: string }> = {
   trivial: { label: 'Routine', tone: 'neutral', ring: 'border-white/15' },
@@ -16,69 +17,6 @@ const SEVERITY: Record<string, { label: string; tone: 'neutral' | 'info' | 'warn
   major: { label: 'Major', tone: 'warn', ring: 'border-aurora-amber/35' },
   critical: { label: 'Critical', tone: 'bad', ring: 'border-aurora-red/40' },
 };
-
-/** Human-readable one-off effects, so a choice is never a black box. */
-const EFFECT_LABELS: Record<keyof EventEffects, { label: string; inverted?: boolean; suffix?: string }> = {
-  treasury: { label: 'Treasury' },
-  approval: { label: 'Approval' },
-  stability: { label: 'Stability' },
-  gdpShock: { label: 'GDP', suffix: '%' },
-  population: { label: 'Population' },
-  inflation: { label: 'Inflation', inverted: true, suffix: 'pp' },
-  unemployment: { label: 'Unemployment', inverted: true, suffix: 'pp' },
-  corruption: { label: 'Corruption', inverted: true },
-  militaryStrength: { label: 'Military' },
-  research: { label: 'Research', suffix: ' pts' },
-  health: { label: 'Healthcare' },
-  education: { label: 'Education' },
-  happiness: { label: 'Happiness' },
-  crime: { label: 'Crime', inverted: true },
-  emissions: { label: 'Emissions', inverted: true, suffix: '%' },
-  softPower: { label: 'Soft power' },
-  civilLiberties: { label: 'Civil liberties' },
-  infrastructure: { label: 'Infrastructure' },
-  inequality: { label: 'Inequality', inverted: true },
-  intelligence: { label: 'Intelligence' },
-  globalRelations: { label: 'World relations' },
-  relations: { label: 'Relations' },
-};
-
-function EffectChips({ effects, muted }: { effects: EventEffects; muted?: boolean }) {
-  const entries = (Object.entries(effects) as [keyof EventEffects, unknown][])
-    .filter(([key, value]) => key !== 'relations' && typeof value === 'number' && value !== 0)
-    .sort((a, b) => Math.abs(b[1] as number) - Math.abs(a[1] as number));
-
-  if (entries.length === 0) return null;
-
-  return (
-    <div className="mt-2 flex flex-wrap gap-1">
-      {entries.map(([key, raw]) => {
-        const value = raw as number;
-        const meta = EFFECT_LABELS[key];
-        const good = meta.inverted ? value < 0 : value > 0;
-        const display =
-          key === 'population'
-            ? `${value > 0 ? '+' : ''}${Math.abs(value) >= 1000 ? `${(value / 1000).toFixed(0)}k` : value}`
-            : `${value > 0 ? '+' : ''}${value}${meta.suffix ?? ''}`;
-        return (
-          <span
-            key={key}
-            className={clsx(
-              'num rounded px-1.5 py-0.5 text-[10px] font-medium',
-              muted
-                ? 'bg-white/[0.06] text-slate-400'
-                : good
-                  ? 'bg-aurora-lime/12 text-aurora-lime'
-                  : 'bg-aurora-red/12 text-aurora-red',
-            )}
-          >
-            {meta.label} {display}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
 
 export function EventModal({ game }: { game: GameState }) {
   const { chooseEventOption } = useGameStore();
@@ -186,7 +124,7 @@ function ChoiceRow({
           )}
         </div>
 
-        <EffectChips effects={choice.effects} />
+        <EffectChips effects={choice.effects} className="mt-2" />
 
         <div className="mt-3 flex items-center gap-2">
           <Button

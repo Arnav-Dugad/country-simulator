@@ -2,9 +2,10 @@ import type { EnergySource, GameState, LogEntry, SectorId } from '../types';
 import { BUILDING_INDEX } from '../data/buildings';
 import { TECH_INDEX } from '../data/technologies';
 import { ACHIEVEMENTS } from '../data/achievements';
-import { DIFFICULTY_INDEX, GOVERNMENT_INDEX, IDEOLOGY_INDEX } from '../data/definitions';
+import { DIFFICULTY_INDEX, GOVERNMENT_INDEX, IDEOLOGY_INDEX, VICTORY_INDEX } from '../data/definitions';
 import {
   activeTradeVolume,
+  baselineDeptSpend,
   clamp,
   computeBudget,
   costScale,
@@ -583,8 +584,23 @@ function updateMilitary(s: GameState, mods: ReturnType<typeof totalModifiers>): 
   const funding = s.budget.military.level;
   const techBonus = s.research.completed.filter((t) => TECH_INDEX[t]?.branch === 'military').length * 3.4;
 
+  // Military power tracks *absolute* defence spending, not the budget ratio.
+  // A superpower spending 1% of a $27T economy fields something Fiji cannot
+  // match at 100% of its own. The log scale means doubling the defence budget
+  // is a real but not overwhelming gain (~+6.6 points).
+  const annualDefenceMillions = Math.max(
+    0.5,
+    baselineDeptSpend(s).military * funding * 12,
+  );
+  const spendPower = (Math.log10(annualDefenceMillions) - 2.2) * 22;
+
   const targetStrength = clamp(
-    12 + funding * 22 + techBonus + mods.militaryPower * 0.5 + s.military.veterancy * 0.12 - s.corruption * 0.16,
+    18 +
+      spendPower +
+      techBonus +
+      mods.militaryPower * 0.5 +
+      s.military.veterancy * 0.15 -
+      s.corruption * 0.14,
     1,
     100,
   );
@@ -948,6 +964,23 @@ function runElection(s: GameState): void {
       tone: 'good',
       icon: '🗳️',
     });
+  } else if (s.settings.neverEndGame) {
+    // Eternal mode: the loss is real but not terminal. The opposition fails to
+    // form a government, you stay on with a badly weakened mandate, and the
+    // next election comes round sooner than it otherwise would.
+    s.monthsToElection = Math.max(12, Math.round(gov.termMonths * 0.6));
+    s.approval = clamp(s.approval - 12, 0, 100);
+    s.stability = clamp(s.stability - 10, 0, 100);
+    s.leader.age += Math.round(gov.termMonths / 24);
+    for (const party of s.parties) {
+      if (party.id !== playerParty?.id) party.relation = clamp(party.relation - 18, -100, 100);
+    }
+    log(s, {
+      text: `Election lost ${rivalResult.toFixed(1)}% to ${playerResult.toFixed(1)}%, but ${topRival?.name ?? 'the opposition'} could not form a government. You continue as a caretaker.`,
+      category: 'election',
+      tone: 'bad',
+      icon: '🗳️',
+    });
   } else {
     s.gameOver = {
       reason: `Defeated at the ballot box by the ${topRival?.name ?? 'opposition'} with ${rivalResult.toFixed(1)}% to your ${playerResult.toFixed(1)}%.`,
@@ -1002,6 +1035,34 @@ function checkAchievements(s: GameState): void {
 function checkGameOver(s: GameState): void {
   if (s.gameOver) return;
 
+  // Victory registers in every mode. In eternal mode it is recorded and
+  // celebrated rather than ending the run, so the player can keep building.
+  if (checkVictory(s) && !s.victoriesAchieved.includes(s.settings.victoryGoal)) {
+    s.victoriesAchieved.push(s.settings.victoryGoal);
+    const goal = VICTORY_INDEX[s.settings.victoryGoal];
+    log(s, {
+      text: `Objective achieved: ${goal?.name ?? s.settings.victoryGoal}. ${
+        s.settings.neverEndGame ? 'The campaign continues.' : ''
+      }`.trim(),
+      category: 'system',
+      tone: 'good',
+      icon: goal?.icon ?? '🏆',
+    });
+
+    if (!s.settings.neverEndGame) {
+      s.gameOver = {
+        reason: 'Every objective of your chosen path has been met.',
+        victory: true,
+        turn: s.turn,
+        title: scoreTitle(s.score),
+      };
+      return;
+    }
+  }
+
+  // Eternal mode switches off every loss condition and the century cap.
+  if (s.settings.neverEndGame) return;
+
   if (s.stability <= 2) {
     s.gameOver = {
       reason: 'The state lost its monopoly on force. The government has been swept away.',
@@ -1038,15 +1099,6 @@ function checkGameOver(s: GameState): void {
       victory: false,
       turn: s.turn,
       title: 'Depopulation',
-    };
-    return;
-  }
-  if (checkVictory(s)) {
-    s.gameOver = {
-      reason: 'Every objective of your chosen path has been met.',
-      victory: true,
-      turn: s.turn,
-      title: scoreTitle(s.score),
     };
     return;
   }

@@ -8,9 +8,11 @@ import type {
   SetupConfig,
   TaxKey,
   TreatyType,
+  VictoryGoalId,
   WarGoal,
 } from '../game/types';
 import { createGame } from '../game/engine/createGame';
+import { VICTORY_INDEX } from '../game/data/definitions';
 import { tick } from '../game/engine/tick';
 import { resolveEvent } from '../game/engine/events';
 import type { ActionResult } from '../game/engine/actions';
@@ -74,6 +76,8 @@ interface GameStore {
   sueForPeace: (warId: string) => ActionResult;
   investInProvince: (provinceId: string, amount: number) => ActionResult;
   grantAutonomy: (provinceId: string) => ActionResult;
+  setVictoryGoal: (goal: VictoryGoalId) => ActionResult;
+  enactDecree: (decreeId: string) => ActionResult;
 
   saveToCloud: (uid: string) => Promise<void>;
   publishScore: (uid: string, displayName: string) => Promise<void>;
@@ -154,12 +158,25 @@ export const useGameStore = create<GameStore>((set, get) => {
     advance: (months = 1) => {
       const current = get().game;
       if (!current || current.gameOver) return;
+      const beforeVictories = current.victoriesAchieved.length;
       const next = clone(current);
       for (let i = 0; i < months; i++) {
         if (next.gameOver || next.eventQueue.length > 0) break;
         tick(next);
       }
       commit(next);
+
+      // In eternal mode an objective is recorded rather than ending the run,
+      // so it needs its own moment — otherwise reaching it is invisible.
+      if (next.victoriesAchieved.length > beforeVictories && !next.gameOver) {
+        const achieved = next.victoriesAchieved[next.victoriesAchieved.length - 1];
+        const goal = VICTORY_INDEX[achieved];
+        useUiStore.getState().notify(
+          'success',
+          `${goal?.icon ?? '🏆'} Objective achieved`,
+          `${goal?.name ?? achieved} complete. The campaign continues — pick a new objective whenever you like.`,
+        );
+      }
 
       if (next.gameOver) {
         set({ playing: false });
@@ -253,6 +270,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     sueForPeace: (warId) => get().run((s) => actions.sueForPeace(s, warId)),
     investInProvince: (provinceId, amount) => get().run((s) => actions.investInProvince(s, provinceId, amount)),
     grantAutonomy: (provinceId) => get().run((s) => actions.grantAutonomy(s, provinceId)),
+    setVictoryGoal: (goal) => get().run((s) => actions.setVictoryGoal(s, goal)),
+    enactDecree: (decreeId) => get().run((s) => actions.enactDecree(s, decreeId)),
 
     saveToCloud: async (uid) => {
       const game = get().game;
