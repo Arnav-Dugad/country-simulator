@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// Security rules for Sovereign.
+//
+// Publish with:  firebase deploy --only firestore:rules
+// Or paste into: Firebase console -> Firestore Database -> Rules
+//
+// The model is deliberately simple:
+//   * a signed-in user owns everything under users/{their uid}
+//   * the leaderboard is world-readable but each entry is writable only by
+//     the user it belongs to, and only with a plausible score
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Cloud saves ------------------------------------------------------
+    // Only the owner may read or write their own campaigns.
+    match /users/{userId}/saves/{saveId} {
+      allow read, delete: if request.auth != null && request.auth.uid == userId;
+
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.payload is string
+        // Documents cap at 1 MiB; reject anything near the limit up front.
+        && request.resource.data.payload.size() < 800000
+        && request.resource.data.meta is map;
+    }
+
+    // ---- Leaderboard ------------------------------------------------------
+    // Readable by anyone (including signed-out visitors browsing the board).
+    match /leaderboard/{entryId} {
+      allow read: if true;
+
+      allow create, update: if request.auth != null
+        && request.resource.data.uid == request.auth.uid
+        // Entry ids are "<uid>_<gameId>", so a user can only touch their own.
+        && entryId.matches('^' + request.auth.uid + '_.*$')
+        && request.resource.data.score is int
+        && request.resource.data.score >= 0
+        && request.resource.data.score <= 200000
+        && request.resource.data.turn is int
+        && request.resource.data.turn >= 0
+        && request.resource.data.turn <= 1200
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 64
+        && request.resource.data.nationName is string
+        && request.resource.data.nationName.size() <= 64;
+
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

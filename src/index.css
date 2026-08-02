@@ -1,0 +1,153 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-white/5;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-950 text-slate-200 font-sans antialiased;
+    /* The aurora sits behind everything and never scrolls away. */
+    background-attachment: fixed;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior-y: none;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-display tracking-tight text-white;
+  }
+
+  ::selection {
+    @apply bg-gold-500/30 text-white;
+  }
+
+  /* Scrollbars: present enough to grab, quiet enough to ignore. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-white/10;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/20;
+  }
+
+  input[type='range'] {
+    @apply h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/10;
+  }
+  input[type='range']::-webkit-slider-thumb {
+    @apply h-4 w-4 appearance-none rounded-full border-2 border-ink-900 bg-gold-500;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15), 0 4px 12px -2px rgba(229, 180, 71, 0.7);
+    transition: transform 0.15s ease;
+  }
+  input[type='range']::-webkit-slider-thumb:hover {
+    transform: scale(1.18);
+  }
+  input[type='range']::-moz-range-thumb {
+    @apply h-4 w-4 rounded-full border-2 border-ink-900 bg-gold-500;
+  }
+
+  input,
+  select,
+  textarea {
+    @apply bg-ink-800/70;
+  }
+
+  /* Respect the OS setting as well as the in-game preference. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  .glass {
+    @apply rounded-2xl border border-white/10 bg-white/[0.035] backdrop-blur-xl;
+    box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset, 0 24px 70px -35px rgba(0, 0, 0, 0.95);
+  }
+
+  .glass-strong {
+    @apply rounded-2xl border border-white/[0.14] bg-ink-850/85 backdrop-blur-2xl;
+    box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.08) inset, 0 30px 90px -30px rgba(0, 0, 0, 0.95);
+  }
+
+  .aurora {
+    @apply pointer-events-none fixed inset-0 -z-10;
+    background-image: radial-gradient(at 8% 12%, rgba(79, 140, 255, 0.26) 0px, transparent 52%),
+      radial-gradient(at 88% 6%, rgba(157, 107, 255, 0.22) 0px, transparent 48%),
+      radial-gradient(at 74% 90%, rgba(61, 219, 217, 0.16) 0px, transparent 52%),
+      radial-gradient(at 20% 92%, rgba(255, 107, 181, 0.14) 0px, transparent 48%);
+  }
+
+  .grid-lines {
+    @apply pointer-events-none fixed inset-0 -z-10 opacity-[0.055];
+    background-image: linear-gradient(rgba(255, 255, 255, 0.7) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.7) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 40%, transparent 100%);
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-br from-white via-white to-gold-400 bg-clip-text text-transparent;
+  }
+
+  .text-gradient-aurora {
+    background: linear-gradient(110deg, #4f8cff, #9d6bff 32%, #3ddbd9 64%, #f5d073);
+    background-size: 220% auto;
+    @apply animate-gradient-pan bg-clip-text text-transparent;
+  }
+
+  .hairline {
+    @apply h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent;
+  }
+
+  .num {
+    @apply font-mono tabular-nums;
+  }
+
+  .focus-ring {
+    @apply outline-none ring-offset-0 focus-visible:ring-2 focus-visible:ring-gold-500/70;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Applied to <html> when the player turns motion off in preferences. */
+  .reduce-motion *,
+  .reduce-motion *::before,
+  .reduce-motion *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
