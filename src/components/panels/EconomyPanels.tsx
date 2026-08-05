@@ -208,7 +208,7 @@ const DEPT_META: Record<BudgetDept, { label: string; icon: string; effect: strin
 };
 
 export function BudgetPanel({ game }: { game: GameState }) {
-  const { setTax, setBudget, issueBonds, repayDebt } = useGameStore();
+  const { setTax, setBudget, issueBonds, repayDebt, setAutoRepayDebt } = useGameStore();
   const symbol = game.identity.currency.symbol;
   const budget = useMemo(() => computeBudget(game), [game]);
   const baseline = useMemo(() => baselineDeptSpend(game), [game]);
@@ -374,11 +374,221 @@ export function BudgetPanel({ game }: { game: GameState }) {
               {debtToGdp(game) > 200 && (
                 <Badge tone="bad" className="mt-3">Markets are close to refusing new issuance</Badge>
               )}
+
+              <div className="mt-4 space-y-2 border-t border-white/[0.07] pt-3">
+                <div className="flex items-baseline justify-between text-xs">
+                  <span className="text-slate-400">Market yield on new debt</span>
+                  <span
+                    className={clsx(
+                      'num font-semibold',
+                      game.economy.bondYield > 12 ? 'text-aurora-red' : game.economy.bondYield > 7 ? 'text-aurora-amber' : 'text-white',
+                    )}
+                  >
+                    {game.economy.bondYield.toFixed(2)}%
+                  </span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-500">
+                  The yield is not the policy rate. It adds a spread for the credit rating, the debt
+                  trajectory, inflation, and whether the central bank is independent — which is why a
+                  captured bank can cut to zero and still watch borrowing get dearer.
+                </p>
+                <button
+                  onClick={() => setAutoRepayDebt(!game.economy.autoRepayDebt)}
+                  className="focus-ring flex w-full items-start gap-3 rounded-lg px-1 py-2 text-left transition hover:bg-white/[0.03]"
+                  role="switch"
+                  aria-checked={game.economy.autoRepayDebt}
+                >
+                  <span
+                    className={clsx(
+                      'mt-0.5 flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 transition',
+                      game.economy.autoRepayDebt ? 'justify-end bg-gold-500' : 'justify-start bg-white/15',
+                    )}
+                  >
+                    <span className="block h-3 w-3 rounded-full bg-white" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs font-medium text-white">Sweep surplus into repayment</span>
+                    <span className="block text-[11px] leading-relaxed text-slate-500">
+                      On, cash above 1.5 months of output pays the debt down automatically. Off, it
+                      accumulates in the treasury — a war chest, at the cost of the interest bill.
+                    </span>
+                  </span>
+                </button>
+              </div>
             </Card>
+          </Reveal>
+
+          <Reveal delay={0.2}>
+            <SovereignFundCard game={game} />
+          </Reveal>
+
+          <Reveal delay={0.22}>
+            <CentralBankCard game={game} />
           </Reveal>
         </div>
       </div>
     </div>
+  );
+}
+
+/* --------------------------- Sovereign fund ---------------------------- */
+
+/**
+ * The sovereign wealth fund.
+ *
+ * Money moved here stops being spendable and starts compounding at a return
+ * that tracks the *world* cycle rather than the domestic one — so the fund is
+ * worth most exactly when the economy at home is worst. That is the entire
+ * argument for having one, and the entire cost of it.
+ */
+function SovereignFundCard({ game }: { game: GameState }) {
+  const { depositToFund, withdrawFromFund } = useGameStore();
+  const symbol = game.identity.currency.symbol;
+  const step = Math.max(50, Math.round(((game.economy.gdp * 1000) / 12) * 0.05));
+  const [amount, setAmount] = useState(step * 4);
+
+  const annual = (game.economy.sovereignFund * game.economy.fundReturn) / 100;
+
+  return (
+    <Card
+      title="Sovereign wealth fund"
+      icon={<PiggyBank size={16} />}
+      subtitle="Cash in the treasury earns nothing. Cash in the fund earns a market return and cannot be spent until it is withdrawn."
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-wider text-slate-500">Fund value</p>
+          <p className="num text-xl font-bold text-gold-400">{formatMoney(game.economy.sovereignFund, symbol)}</p>
+        </div>
+        <div>
+          <p className="text-[11px] uppercase tracking-wider text-slate-500">Return</p>
+          <p
+            className={clsx(
+              'num text-xl font-bold',
+              game.economy.fundReturn >= 0 ? 'text-aurora-lime' : 'text-aurora-red',
+            )}
+          >
+            {game.economy.fundReturn >= 0 ? '+' : ''}
+            {game.economy.fundReturn.toFixed(1)}%
+          </p>
+          <p className="num text-[10px] text-slate-500">
+            {formatMoney(annual / 12, symbol)} this month
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <Slider
+          label="Transfer amount"
+          value={amount}
+          min={step}
+          max={step * 40}
+          step={step}
+          onChange={setAmount}
+          format={(v) => formatMoney(v, symbol)}
+        />
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={game.economy.treasury < amount}
+            onClick={() => depositToFund(amount)}
+          >
+            Deposit
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={game.economy.sovereignFund < amount}
+            onClick={() => withdrawFromFund(amount)}
+          >
+            Withdraw
+          </Button>
+        </div>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+        Withdrawing more than a fifth of the fund at once is read as distress: it costs business
+        confidence and approval. Building a Sovereign Fund Office raises the return and steadies it.
+      </p>
+    </Card>
+  );
+}
+
+/* ---------------------------- Central bank ----------------------------- */
+
+/**
+ * Monetary policy.
+ *
+ * Independence is the inherited arrangement. Taking control lets the player set
+ * the rate directly and is permanently priced in by markets — a credit-rating
+ * hit, a confidence hit and a standing spread on every bond thereafter.
+ */
+function CentralBankCard({ game }: { game: GameState }) {
+  const { setCentralBankIndependence, setPolicyRate } = useGameStore();
+  const independent = game.economy.centralBankIndependent;
+
+  return (
+    <Card
+      title="Central bank"
+      icon={<Landmark size={16} />}
+      subtitle={independent ? 'Independent — sets the rate by rule' : 'Under political direction'}
+      action={<Badge tone={independent ? 'good' : 'warn'}>{independent ? 'Independent' : 'Directed'}</Badge>}
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-wider text-slate-500">Policy rate</p>
+          <p className="num text-xl font-bold text-white">{game.economy.interestRate.toFixed(2)}%</p>
+        </div>
+        <div>
+          <p className="text-[11px] uppercase tracking-wider text-slate-500">Inflation</p>
+          <p
+            className={clsx(
+              'num text-xl font-bold',
+              game.economy.inflation > 6 ? 'text-aurora-red' : game.economy.inflation > 3.5 ? 'text-aurora-amber' : 'text-aurora-lime',
+            )}
+          >
+            {game.economy.inflation.toFixed(2)}%
+          </p>
+        </div>
+      </div>
+
+      {!independent && (
+        <div className="mt-4">
+          <Slider
+            label="Directed policy rate"
+            value={game.economy.policyRateTarget}
+            min={0}
+            max={30}
+            step={0.25}
+            onChange={(v) => setPolicyRate(v)}
+            format={(v) => `${v.toFixed(2)}%`}
+            hint={
+              game.economy.policyRateTarget < game.economy.inflation
+                ? 'The real rate is negative. Inflation will keep rising until the rate is above it.'
+                : 'A real rate above zero pulls inflation down and growth with it.'
+            }
+          />
+        </div>
+      )}
+
+      <div className="mt-4">
+        <Button
+          size="sm"
+          variant={independent ? 'secondary' : 'primary'}
+          full
+          onClick={() => setCentralBankIndependence(!independent)}
+        >
+          {independent ? 'Take direct control of the rate' : 'Restore central bank independence'}
+        </Button>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+        {independent
+          ? 'Taking control lets you set the rate yourself. Markets will price it immediately: a rating downgrade, a confidence hit, and a standing spread on every bond you issue afterwards.'
+          : 'Restoring independence recovers part of the rating and confidence you spent, and hands the rate back to a Taylor rule.'}
+      </p>
+    </Card>
   );
 }
 

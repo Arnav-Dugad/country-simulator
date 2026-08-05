@@ -172,6 +172,19 @@ export const BUILDINGS: Building[] = [
     description: 'Enough courtrooms and judges to clear the backlog within a lifetime.',
     modifiers: { corruption: -8, crime: -6, civilLiberties: 6, stability: 3 }, maxCount: 4, jobs: 8, energy: -2 },
 
+  { id: 'science-academy', name: 'National Academy of Sciences', category: 'science', icon: '🏛️', cost: 9400, buildTime: 16, upkeep: 190,
+    description: 'A standing national academy with its own endowment, chairs and instrumentation — enough institutional weight to run another major programme in parallel.',
+    modifiers: { research: 18, education: 6, softPower: 5 }, maxCount: 1, jobs: 12, energy: -5,
+    requires: { tech: ['national-lab-network'] } },
+  { id: 'sovereign-fund-office', name: 'Sovereign Fund Office', category: 'civic', icon: '🏦', cost: 3200, buildTime: 8, upkeep: 70,
+    description: 'A professional investment office for the national endowment, insulated from the political cycle that funds it.',
+    modifiers: { taxEfficiency: 6, spendingEfficiency: 4, stability: 2 }, maxCount: 1, jobs: 4, energy: -1,
+    requires: { tech: ['sovereign-wealth-management'] } },
+  { id: 'emergency-command', name: 'National Emergency Command', category: 'civic', icon: '🧯', cost: 4600, buildTime: 10, upkeep: 120,
+    description: 'A permanent crisis cell with its own communications, stockpiles and authority to act before the cabinet has met.',
+    modifiers: { stability: 7, health: 4, spendingEfficiency: 3 }, maxCount: 2, jobs: 6, energy: -3,
+    requires: { tech: ['civic-resilience'] } },
+
   /* -------------------------------- Wonders ------------------------------- */
   { id: 'wonder-arcology', name: 'The Arcology', category: 'wonder', icon: '🏙️', cost: 88000, buildTime: 40, upkeep: 620,
     description: 'A single self-contained city for two million people, with a net-zero footprint.',

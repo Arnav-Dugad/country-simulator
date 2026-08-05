@@ -171,6 +171,48 @@ export const TECHNOLOGIES: Technology[] = [
     modifiers: { research: 24, softPower: 26, energyOutput: 10 },
     unlocksBuildings: ['lunar-outpost'], era: 'near-future' },
 
+  /* --------------------- Research capacity (parallelism) ------------------ */
+  // The only two technologies in the game that change *how* you research
+  // rather than what you get from it. Both are deliberately cheap for their
+  // tier: the reward is compounding, so the cost does not need to be.
+  { id: 'research-consortia', name: 'Research Consortia', branch: 'science', tier: 2, icon: '🔗', cost: 1050,
+    requires: ['public-research'],
+    description: 'Standing joint ventures between the state, the universities and industry — so a second national programme can run without competing for the same committee.',
+    modifiers: { research: 8, spendingEfficiency: 3 } },
+  { id: 'national-lab-network', name: 'National Laboratory Network', branch: 'science', tier: 3, icon: '🏛️', cost: 2400,
+    requires: ['research-consortia', 'semiconductors'],
+    description: 'Federated laboratories with shared instrumentation and a single funding pipeline. A third major programme becomes administratively possible.',
+    modifiers: { research: 16, education: 4 }, unlocksBuildings: ['science-academy'],
+    unlocksPolicies: ['open-science-mandate'] },
+
+  /* ------------------------------ New: economy ---------------------------- */
+  { id: 'sovereign-wealth-management', name: 'Sovereign Wealth Management', branch: 'economy', tier: 2, icon: '🏛️', cost: 880,
+    requires: ['modern-banking'],
+    description: 'A professional fund manager for the national balance sheet, mandated to outlive the government that created it.',
+    modifiers: { taxEfficiency: 4, gdpGrowth: 0.2 }, unlocksBuildings: ['sovereign-fund-office'] },
+  { id: 'industrial-policy', name: 'Strategic Industrial Policy', branch: 'economy', tier: 3, icon: '🏗️', cost: 1500,
+    requires: ['supply-chain-analytics'],
+    description: 'Pick the sectors, fund the capability, and accept that some of the bets will not pay.',
+    modifiers: { gdpGrowth: 0.5, tradeIncome: 8, spendingEfficiency: -3 },
+    unlocksPolicies: ['strategic-industries-act'] },
+
+  /* ------------------------------ New: society ---------------------------- */
+  { id: 'public-administration', name: 'Professional Civil Service', branch: 'society', tier: 2, icon: '🗂️', cost: 820,
+    requires: ['mass-education'],
+    description: 'Recruitment by examination, tenure by performance, and a state that survives a change of government.',
+    modifiers: { corruption: -9, spendingEfficiency: 7, taxEfficiency: 5 } },
+  { id: 'civic-resilience', name: 'Civil Contingencies Framework', branch: 'society', tier: 3, icon: '🧯', cost: 1350,
+    requires: ['public-administration', 'public-health-systems'],
+    description: 'Stockpiles, exercises and a chain of command that already knows who is in charge when it happens.',
+    modifiers: { stability: 6, health: 5, spendingEfficiency: 4 },
+    unlocksBuildings: ['emergency-command'] },
+
+  /* ------------------------------ New: military --------------------------- */
+  { id: 'integrated-air-defence', name: 'Integrated Air Defence', branch: 'military', tier: 3, icon: '📶', cost: 1650,
+    requires: ['precision-munitions'],
+    description: 'One picture of the sky, shared by every sensor and every shooter you own.',
+    modifiers: { militaryPower: 13, intelligence: 6 } },
+
   /* ------------------------------ Cross-branch ---------------------------- */
   { id: 'high-speed-transit', name: 'High-Speed Transit', branch: 'economy', tier: 3, icon: '🚄', cost: 1700,
     requires: ['grid-electrification', 'supply-chain-analytics'],

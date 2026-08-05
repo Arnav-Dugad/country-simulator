@@ -3,6 +3,8 @@ import type {
   BudgetDept,
   CovertOp,
   GameState,
+  LogEntry,
+  MilitaryBranch,
   MilitaryState,
   OrgId,
   ResourceId,
@@ -19,10 +21,28 @@ import { resolveEvent } from '../game/engine/events';
 import type { TradeTerm } from '../game/engine/trade';
 import type { ActionResult } from '../game/engine/actions';
 import * as actions from '../game/engine/actions';
+import { respondToCrisis } from '../game/engine/crises';
+import { acceptOffer, declineOffer } from '../game/engine/world';
+import {
+  depositToFund,
+  setAutoRepayDebt,
+  setCentralBankIndependence,
+  setPolicyRate,
+  withdrawFromFund,
+} from '../game/engine/finance';
+import { abandonAgenda, declareAgenda } from '../game/engine/agenda';
 import { clearAutosave, isPlayableSave, saveGameLocally, writeAutosave } from '../game/storage';
 import { saveGameToCloud, submitScore } from '../firebase/saves';
 import { isFirebaseReady } from '../firebase/config';
 import { useUiStore } from './uiStore';
+
+/**
+ * How many months of history the rewind buffer holds.
+ *
+ * Kept in memory only and never persisted: it is an undo for a misclick, not
+ * a save-scumming tool, which is why it is disabled entirely under ironman.
+ */
+const REWIND_DEPTH = 12;
 
 /** Real milliseconds between auto-played months, by speed setting. */
 const SPEED_MS: Record<1 | 2 | 3, number> = { 1: 2200, 2: 1100, 3: 480 };
@@ -49,13 +69,21 @@ interface GameStore {
   chooseEventOption: (choiceId: string) => void;
   dismissEventOutcome: () => void;
 
+  /** Months available to rewind. Zero under ironman. */
+  rewindDepth: () => number;
+  /** Steps the campaign back one month. */
+  rewind: () => void;
+
   /** Runs an engine action against a cloned state and commits the result. */
   run: (mutator: Mutator) => ActionResult;
 
   enactPolicy: (id: string) => ActionResult;
   repealPolicy: (id: string) => ActionResult;
   startResearch: (id: string) => ActionResult;
-  cancelResearch: () => ActionResult;
+  cancelResearch: (id?: string) => ActionResult;
+  setResearchWeight: (id: string, priority: number) => ActionResult;
+  moveResearchQueue: (id: string, delta: number) => ActionResult;
+  rushResearch: (id: string) => ActionResult;
   build: (id: string) => ActionResult;
   cancelBuild: (instanceId: string) => ActionResult;
   setTax: (key: TaxKey, value: number) => ActionResult;
@@ -89,8 +117,36 @@ interface GameStore {
   ) => ActionResult;
   cancelTradeAgreement: (agreementId: string) => ActionResult;
 
+  /* New systems */
+  setBranchFunding: (branch: MilitaryBranch, weight: number) => ActionResult;
+  setNuclearProgramme: (active: boolean) => ActionResult;
+  setMartialLaw: (provinceId: string, active: boolean) => ActionResult;
+  setProvinceInvestment: (provinceId: string, amount: number) => ActionResult;
+  respondToCrisis: (crisisId: string, responseId: string) => ActionResult;
+  acceptOffer: (offerId: string) => ActionResult;
+  declineOffer: (offerId: string) => ActionResult;
+  depositToFund: (amount: number) => ActionResult;
+  withdrawFromFund: (amount: number) => ActionResult;
+  setCentralBankIndependence: (independent: boolean) => ActionResult;
+  setPolicyRate: (rate: number) => ActionResult;
+  setAutoRepayDebt: (enabled: boolean) => ActionResult;
+  declareAgenda: (defId: string) => ActionResult;
+  abandonAgenda: () => ActionResult;
+
   saveToCloud: (uid: string) => Promise<void>;
   publishScore: (uid: string, displayName: string) => Promise<void>;
+}
+
+/** Appends an entry to the campaign log from a store-level action. */
+function pushLog(s: GameState, entry: Omit<LogEntry, 'id' | 'turn' | 'year' | 'month'>): void {
+  s.log.unshift({
+    id: `log-store-${s.turn}-${s.log.length}-${Math.floor(Math.random() * 1e6).toString(36)}`,
+    turn: s.turn,
+    year: s.year,
+    month: s.month,
+    ...entry,
+  });
+  if (s.log.length > 400) s.log.length = 400;
 }
 
 /**
@@ -112,6 +168,14 @@ function stopTimer(): void {
 }
 
 export const useGameStore = create<GameStore>((set, get) => {
+  /**
+   * Snapshots taken before each advanced month, newest last.
+   *
+   * Deliberately module-local rather than store state: it must never be
+   * serialised into a save, and nothing should re-render when it changes.
+   */
+  let rewindStack: GameState[] = [];
+
   /** Persists locally on every commit; cloud sync is throttled separately. */
   const commit = (next: GameState): void => {
     set({ game: next });
@@ -143,6 +207,7 @@ export const useGameStore = create<GameStore>((set, get) => {
 
     start: (config) => {
       stopTimer();
+      rewindStack = [];
       const game = createGame(config);
       set({ game, playing: false, lastSyncedTurn: -1, lastEventOutcome: null });
       writeAutosave(game);
@@ -152,6 +217,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     load: (state) => {
       if (!isPlayableSave(state)) return false;
       stopTimer();
+      rewindStack = [];
       set({ game: state, playing: false, lastSyncedTurn: state.turn, lastEventOutcome: null });
       writeAutosave(state);
       return true;
@@ -162,13 +228,47 @@ export const useGameStore = create<GameStore>((set, get) => {
       const game = get().game;
       if (game) saveGameLocally(game);
       clearAutosave();
+      rewindStack = [];
       set({ game: null, playing: false, lastEventOutcome: null });
+    },
+
+    rewindDepth: () => {
+      const game = get().game;
+      if (!game || game.settings.ironman) return 0;
+      return rewindStack.length;
+    },
+
+    rewind: () => {
+      const game = get().game;
+      if (!game) return;
+      if (game.settings.ironman) {
+        useUiStore.getState().notify('info', 'Ironman', 'Decisions are final in an ironman campaign.');
+        return;
+      }
+      const previous = rewindStack.pop();
+      if (!previous) {
+        useUiStore.getState().notify('info', 'Nothing to rewind', 'No earlier month is held in memory.');
+        return;
+      }
+      stopTimer();
+      set({ game: previous, playing: false, lastEventOutcome: null });
+      writeAutosave(previous);
+      useUiStore
+        .getState()
+        .notify('success', 'Rewound', `Back to month ${previous.turn}. ${rewindStack.length} step(s) remain.`);
     },
 
     advance: (months = 1) => {
       const current = get().game;
       if (!current || current.gameOver) return;
       const beforeVictories = current.victoriesAchieved.length;
+
+      // Snapshot before time moves, so a bad month can be taken back.
+      if (!current.settings.ironman) {
+        rewindStack.push(clone(current));
+        if (rewindStack.length > REWIND_DEPTH) rewindStack.shift();
+      }
+
       const next = clone(current);
       for (let i = 0; i < months; i++) {
         if (next.gameOver || next.eventQueue.length > 0) break;
@@ -257,7 +357,10 @@ export const useGameStore = create<GameStore>((set, get) => {
     enactPolicy: (id) => get().run((s) => actions.enactPolicy(s, id)),
     repealPolicy: (id) => get().run((s) => actions.repealPolicy(s, id)),
     startResearch: (id) => get().run((s) => actions.startResearch(s, id)),
-    cancelResearch: () => get().run((s) => actions.cancelResearch(s)),
+    cancelResearch: (id) => get().run((s) => actions.cancelResearch(s, id)),
+    setResearchWeight: (id, priority) => get().run((s) => actions.setResearchWeight(s, id, priority)),
+    moveResearchQueue: (id, delta) => get().run((s) => actions.moveResearchQueue(s, id, delta)),
+    rushResearch: (id) => get().run((s) => actions.rushResearchProject(s, id)),
     build: (id) => get().run((s) => actions.startConstruction(s, id)),
     cancelBuild: (instanceId) => get().run((s) => actions.cancelConstruction(s, instanceId)),
     setTax: (key, value) => get().run((s) => actions.setTax(s, key, value)),
@@ -285,6 +388,33 @@ export const useGameStore = create<GameStore>((set, get) => {
     proposeTradeAgreement: (countryId, resource, direction, quantity, termMonths) =>
       get().run((s) => actions.proposeTradeAgreement(s, countryId, resource, direction, quantity, termMonths)),
     cancelTradeAgreement: (agreementId) => get().run((s) => actions.cancelTradeAgreement(s, agreementId)),
+
+    setBranchFunding: (branch, weight) => get().run((s) => actions.setBranchFunding(s, branch, weight)),
+    setNuclearProgramme: (active) => get().run((s) => actions.setNuclearProgramme(s, active)),
+    setMartialLaw: (provinceId, active) => get().run((s) => actions.setMartialLaw(s, provinceId, active)),
+    setProvinceInvestment: (provinceId, amount) =>
+      get().run((s) => actions.setProvinceInvestment(s, provinceId, amount)),
+
+    respondToCrisis: (crisisId, responseId) =>
+      get().run((s) => {
+        const outcome = respondToCrisis(s, crisisId, responseId, (entry) => pushLog(s, entry));
+        return { ok: outcome.ok, message: outcome.message };
+      }),
+
+    acceptOffer: (offerId) =>
+      get().run((s) => acceptOffer(s, offerId, (entry) => pushLog(s, entry))),
+    declineOffer: (offerId) =>
+      get().run((s) => declineOffer(s, offerId, (entry) => pushLog(s, entry))),
+
+    depositToFund: (amount) => get().run((s) => depositToFund(s, amount)),
+    withdrawFromFund: (amount) => get().run((s) => withdrawFromFund(s, amount)),
+    setCentralBankIndependence: (independent) =>
+      get().run((s) => setCentralBankIndependence(s, independent)),
+    setPolicyRate: (rate) => get().run((s) => setPolicyRate(s, rate)),
+    setAutoRepayDebt: (enabled) => get().run((s) => setAutoRepayDebt(s, enabled)),
+
+    declareAgenda: (defId) => get().run((s) => declareAgenda(s, defId)),
+    abandonAgenda: () => get().run((s) => abandonAgenda(s)),
 
     saveToCloud: async (uid) => {
       const game = get().game;

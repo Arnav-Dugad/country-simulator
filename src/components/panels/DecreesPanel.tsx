@@ -39,7 +39,12 @@ export function DecreesPanel({ game }: { game: GameState }) {
           <Stat label="Actions available" value={`${ready} / ${DECREES.length}`} accent="#f5d073" icon={<Gavel size={14} />} />
           <Stat label="On cooldown" value={onCooldown} accent="#4f8cff" icon={<Clock size={14} />} />
           <Stat label="Treasury" value={formatMoney(game.economy.treasury, symbol)} accent="#7ee787" />
-          <Stat label="Political capital" value={`${game.approval.toFixed(0)}%`} hint="Approval rating" accent="#9d6bff" />
+          <Stat
+            label="Political capital"
+            value={Math.floor(game.governance.capital)}
+            hint={`${game.governance.capitalPerMonth >= 0 ? '+' : ''}${game.governance.capitalPerMonth.toFixed(1)}/mo — every action costs some`}
+            accent="#9d6bff"
+          />
         </div>
       </Reveal>
 
@@ -116,6 +121,17 @@ export function DecreesPanel({ game }: { game: GameState }) {
                     <span className="text-slate-500">Cost</span>
                     <span className="num text-slate-300">
                       {availability.cost > 0 ? formatMoney(availability.cost, symbol) : 'None'}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-baseline justify-between text-[11px]">
+                    <span className="text-slate-500">Political capital</span>
+                    <span
+                      className={clsx(
+                        'num',
+                        game.governance.capital >= availability.politicalCost ? 'text-aurora-violet' : 'text-aurora-red',
+                      )}
+                    >
+                      {availability.politicalCost}
                     </span>
                   </div>
                   <div className="mt-1 flex items-baseline justify-between text-[11px]">

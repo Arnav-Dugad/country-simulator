@@ -4,7 +4,8 @@ import {
   ResponsiveContainer, Tooltip as RTooltip, XAxis, YAxis,
 } from 'recharts';
 import {
-  AlertTriangle, Building2, Flame, Gauge, HeartPulse, Radio, TrendingDown, TrendingUp, Users, Zap,
+  AlertOctagon, AlertTriangle, Building2, Flame, FlaskConical, Gauge, Globe2, HeartPulse, Landmark,
+  Radio, TrendingDown, TrendingUp, Users, Zap,
 } from 'lucide-react';
 import clsx from 'clsx';
 import type { GameState, SectorId } from '../../game/types';
@@ -12,8 +13,11 @@ import {
   MONTH_SHORT, SECTOR_COLORS, SECTOR_LABELS, computeBudget, debtToGdp, energyBalance,
   formatBillions, formatMoney, formatPopulation, gdpPerCapita, modifierSources, renewableShare,
 } from '../../game/selectors';
+import { CRISIS_INDEX } from '../../game/data/crises';
+import { FACTION_INDEX } from '../../game/data/factions';
 import { nationalIndex } from '../../game/engine/scoring';
 import { frontierPerCapita } from '../../game/engine/tick';
+import { researchCapacity } from '../../game/engine/research';
 import { Badge, Card, CountUp, Meter, Reveal, Stat, Tooltip, meterColor } from '../ui/primitives';
 import { useUiStore } from '../../store/uiStore';
 import { ChartFrame, chartAxis, chartTooltip } from './chartHelpers';
@@ -111,6 +115,40 @@ export function Dashboard({ game }: { game: GameState }) {
             hint={`Debt ${debtToGdp(game).toFixed(0)}% of GDP`}
             icon={<Building2 size={14} />}
             accent={budget.net >= 0 ? '#7ee787' : '#ff5c6c'}
+          />
+        </div>
+      </Reveal>
+
+      <Reveal delay={0.03}>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Stat
+            label="Political capital"
+            value={Math.floor(game.governance.capital)}
+            hint={`${game.governance.capitalPerMonth >= 0 ? '+' : ''}${game.governance.capitalPerMonth.toFixed(1)} per month`}
+            icon={<Landmark size={14} />}
+            accent="#9d6bff"
+          />
+          <Stat
+            label="Research"
+            value={`${game.research.active.length} / ${researchCapacity(game)}`}
+            hint={`${Math.round(game.research.perMonth)} points per month`}
+            icon={<FlaskConical size={14} />}
+            accent="#3ddbd9"
+          />
+          <Stat
+            label="World cycle"
+            value={game.world.cyclePhase}
+            hint={`Tension ${game.world.tension.toFixed(0)} · world growth ${game.world.globalGrowth.toFixed(1)}%`}
+            icon={<Globe2 size={14} />}
+            accent={game.world.cycle >= 0 ? '#7ee787' : '#ff5c6c'}
+            className="capitalize"
+          />
+          <Stat
+            label="Active crises"
+            value={game.crises.length}
+            hint={game.crises.length > 0 ? 'Escalating on a timer' : 'Nothing escalating'}
+            icon={<AlertOctagon size={14} />}
+            accent={game.crises.length > 0 ? '#ff5c6c' : '#7ee787'}
           />
         </div>
       </Reveal>
@@ -375,6 +413,31 @@ interface Alert {
 function buildAlerts(game: GameState, net: number): Alert[] {
   const alerts: Alert[] = [];
   const gdpMonthly = (game.economy.gdp * 1000) / 12;
+
+  // Crises escalate on a timer, so they outrank everything else on this list.
+  for (const crisis of game.crises) {
+    const def = CRISIS_INDEX[crisis.defId];
+    if (!def) continue;
+    alerts.push({
+      text: `${def.name} — severity ${crisis.severity.toFixed(0)}`,
+      tone: 'danger',
+      panel: 'crises',
+    });
+  }
+  if (game.offers.length > 0) {
+    alerts.push({
+      text: `${game.offers.length} diplomatic proposal${game.offers.length === 1 ? '' : 's'} awaiting an answer`,
+      tone: 'warning',
+      panel: 'diplomacy',
+    });
+  }
+  if (game.governance.capital < 8 && game.turn > 6) {
+    alerts.push({ text: 'Political capital nearly exhausted', tone: 'warning', panel: 'politics' });
+  }
+  const hostileFaction = game.factions.find((f) => f.satisfaction < 25 && f.influence > 12);
+  if (hostileFaction) {
+    alerts.push({ text: `${FACTION_INDEX[hostileFaction.id]?.name ?? 'A faction'} is hostile`, tone: 'warning', panel: 'factions' });
+  }
 
   if (game.stability < 30) alerts.push({ text: 'Stability critical — unrest is spreading', tone: 'danger', panel: 'politics' });
   if (game.approval < 25) alerts.push({ text: 'Approval collapsing', tone: 'danger', panel: 'politics' });

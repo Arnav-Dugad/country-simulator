@@ -1,9 +1,12 @@
-import type { BudgetDept, GameState, PanelTarget, TaxKey } from '../types';
+import type { BudgetDept, GameState, MilitaryBranch, PanelTarget, TaxKey } from '../types';
 import { ADVISORS, ADVISOR_INDEX, ORGS } from '../data/institutions';
 import { POLICIES, POLICY_INDEX } from '../data/policies';
-import { TECHNOLOGIES } from '../data/technologies';
+import { TECHNOLOGIES, TECH_INDEX } from '../data/technologies';
 import { BUILDINGS, BUILDING_INDEX } from '../data/buildings';
 import { DECREES, DECREE_INDEX } from '../data/decrees';
+import { CRISIS_INDEX } from '../data/crises';
+import { FACTION_INDEX } from '../data/factions';
+import { AGENDAS, AGENDA_DECLARATION_COST, AGENDA_INDEX } from '../data/agendas';
 import {
   activeTradeVolume, averageRelations, computeBudget, debtToGdp, energyBalance, renewableShare,
 } from '../selectors';
@@ -11,6 +14,9 @@ import { victoryProgress } from './scoring';
 import {
   buildAvailability, decreeAvailability, orgEligibility, policyAvailability,
 } from './actions';
+import { researchCapacity, lockedSlotSources, startableTechs } from './research';
+import { responseAvailability } from './crises';
+import { hostileFactions } from './politics';
 
 /**
  * A single piece of advice from the cabinet.
@@ -47,7 +53,11 @@ export type RecommendationAction =
   | { kind: 'build'; id: string; label: string }
   | { kind: 'org'; id: string; label: string }
   | { kind: 'budget'; dept: BudgetDept; level: number; label: string }
-  | { kind: 'tax'; key: TaxKey; value: number; label: string };
+  | { kind: 'tax'; key: TaxKey; value: number; label: string }
+  | { kind: 'crisis'; crisisId: string; responseId: string; label: string }
+  | { kind: 'offer'; offerId: string; accept: boolean; label: string }
+  | { kind: 'agenda'; id: string; label: string }
+  | { kind: 'branch'; branch: MilitaryBranch; weight: number; label: string };
 
 /** Generic aide used when the relevant portfolio has nobody in it. */
 const VACANT = {
@@ -90,6 +100,11 @@ function bestPolicyFor(
  *
  * Pure and side-effect free — it reads the state and returns a list, so it can
  * be called from React render without cloning anything.
+ *
+ * The ordering rule is deliberate: the board should never be silent. Emergencies
+ * come first, then things going wrong, then the best available opportunity —
+ * and if a country is running perfectly there is always a next thing to build,
+ * research, join or commit to, because there always is in reality.
  */
 export function buildRecommendations(s: GameState, limit = 3): Recommendation[] {
   const out: Recommendation[] = [];
@@ -102,6 +117,60 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
     const { from, ...rest } = r;
     out.push({ ...rest, ...speaker(s, from) });
   };
+
+  /* ------------------------------ Crises -------------------------------- */
+  // A live crisis outranks everything: it is already costing the country every
+  // month, and unlike most problems it escalates on a timer.
+  for (const crisis of s.crises) {
+    const def = CRISIS_INDEX[crisis.defId];
+    if (!def) continue;
+    const stage = def.stages[crisis.stage];
+    const affordable = def.responses.find((r) => responseAvailability(s, crisis.id, r.id).enabled);
+    const stagesLeft = def.stages.length - 1 - crisis.stage;
+    push({
+      from: crisis.defId.includes('bank') || crisis.defId.includes('debt') || crisis.defId.includes('inflation')
+        ? 'adv-finance'
+        : def.category === 'health' ? 'adv-health'
+          : def.category === 'security' ? 'adv-defence'
+            : def.category === 'environmental' ? 'adv-environment'
+              : 'adv-interior',
+      id: `crisis-${crisis.id}`,
+      urgency: 150 + crisis.severity + crisis.stage * 20,
+      severity: 'critical',
+      headline: `${def.name}: ${stage?.label ?? 'ongoing'} (severity ${crisis.severity.toFixed(0)})`,
+      detail: `${stage?.description ?? def.summary} ${
+        stagesLeft > 0
+          ? `It escalates again in ${Math.max(1, (stage?.months ?? 4) - crisis.monthsInStage)} month${
+              (stage?.months ?? 4) - crisis.monthsInStage === 1 ? '' : 's'
+            } if we do nothing.`
+          : 'This is the final stage. If it runs out unresolved the damage is permanent.'
+      }`,
+      panel: 'crises',
+      action: affordable
+        ? { kind: 'crisis', crisisId: crisis.id, responseId: affordable.id, label: affordable.label }
+        : undefined,
+    });
+  }
+
+  /* ------------------------- Diplomatic offers --------------------------- */
+  for (const offer of s.offers) {
+    const nation = s.nations.find((n) => n.id === offer.countryId);
+    const hostile = offer.kind === 'demand' || offer.kind === 'ultimatum';
+    const monthsLeft = Math.max(0, offer.expiresTurn - s.turn);
+    push({
+      from: 'adv-foreign',
+      id: `offer-${offer.id}`,
+      urgency: hostile ? 92 : 46,
+      severity: hostile ? 'warning' : 'opportunity',
+      headline: `${offer.title} — ${monthsLeft} month${monthsLeft === 1 ? '' : 's'} to answer`,
+      detail: offer.body,
+      panel: 'diplomacy',
+      action:
+        hostile || (nation && nation.relations < 0)
+          ? { kind: 'offer', offerId: offer.id, accept: false, label: 'Decline' }
+          : { kind: 'offer', offerId: offer.id, accept: true, label: 'Accept' },
+    });
+  }
 
   /* ------------------------------ Fiscal -------------------------------- */
 
@@ -121,7 +190,7 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
       action: { kind: 'tax', key: 'income', value: raiseTo, label: `Raise income tax to ${raiseTo}%` },
     });
   } else if (budget.net > gdpMonthly * 0.04 && s.economy.debt <= 0) {
-    // A large surplus with no debt is idle money.
+    // A large surplus with no debt is idle money — put it somewhere.
     const underfunded = (Object.keys(s.budget) as BudgetDept[])
       .filter((d) => s.budget[d].level < 1.2)
       .sort((a, b) => s.budget[a].level - s.budget[b].level)[0];
@@ -133,7 +202,7 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
         urgency: 30,
         severity: 'opportunity',
         headline: 'A large surplus is sitting idle',
-        detail: `We are running a surplus of ${((budget.net / gdpMonthly) * 100).toFixed(1)}% of monthly output with no debt to service. Money in the treasury does nothing. ${underfunded} is our thinnest department — I would put it there.`,
+        detail: `We are running a surplus of ${((budget.net / gdpMonthly) * 100).toFixed(1)}% of monthly output with no debt to service. Money in the treasury does nothing — it does not even earn a return unless we put it in the sovereign fund. ${underfunded} is our thinnest department; I would put it there.`,
         panel: 'budget',
         action: { kind: 'budget', dept: underfunded, level, label: `Raise ${underfunded} to ${(level * 100).toFixed(0)}%` },
       });
@@ -147,7 +216,7 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
       urgency: 60 + debt / 4,
       severity: debt > 220 ? 'critical' : 'warning',
       headline: `Public debt is ${debt.toFixed(0)}% of GDP`,
-      detail: `Interest is now ${((budget.expenditure.debtInterest / gdpMonthly) * 100).toFixed(1)}% of monthly output — money that buys nothing. At this level our credit rating drives the cost of everything else we do.`,
+      detail: `Interest is now ${((budget.expenditure.debtInterest / gdpMonthly) * 100).toFixed(1)}% of monthly output — money that buys nothing. We are borrowing new money at ${s.economy.bondYield.toFixed(1)}%, and at this level our credit rating drives the cost of everything else we do.`,
       panel: 'budget',
       action:
         decreeAvailability(s, 'debt-restructuring').enabled && debt > 200
@@ -166,7 +235,11 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
       urgency: 55 + s.economy.inflation * 3,
       severity: s.economy.inflation > 12 ? 'critical' : 'warning',
       headline: `Inflation is running at ${s.economy.inflation.toFixed(1)}%`,
-      detail: `Prices are rising far above target. The central bank will keep tightening on its own, which will cost us growth. Closing the deficit is the durable fix; a price freeze buys time but stores up distortion.`,
+      detail: `Prices are rising far above target. ${
+        s.economy.centralBankIndependent
+          ? 'The central bank will keep tightening on its own, which will cost us growth.'
+          : `You control the rate and you have it at ${s.economy.policyRateTarget.toFixed(2)}%. Nothing will improve until that goes above inflation.`
+      } Closing the deficit is the durable fix; a price freeze buys time but stores up distortion.`,
       panel: 'economy',
       action: ready ? { kind: 'decree', id: 'price-freeze', label: 'Freeze essential prices' } : undefined,
     });
@@ -198,9 +271,11 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
       severity: s.economy.growth < -1.5 ? 'critical' : 'warning',
       headline: `Growth has fallen to ${s.economy.growth.toFixed(2)}%`,
       detail:
-        s.research.completed.length < 12
-          ? `The economy has caught up with what its institutions and technology can support. More spending will not fix that — research raises the ceiling, and so do education, infrastructure and lower corruption.`
-          : `Output is barely moving. Look at what is capping us: energy, corruption, education, or simply the interest rate.`,
+        s.world.cycle < -0.35
+          ? `Part of this is not ours: the world economy is in a ${s.world.cyclePhase} and external demand is falling with it. What we control is whether we come out of it with more capacity than we went in with.`
+          : s.research.completed.length < 12
+            ? `The economy has caught up with what its institutions and technology can support. More spending will not fix that — research raises the ceiling, and so do education, infrastructure and lower corruption.`
+            : `Output is barely moving. Look at what is capping us: energy, corruption, education, or simply the interest rate.`,
       panel: 'economy',
     });
   }
@@ -217,7 +292,7 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
       urgency: 75 + (1 - balance) * 120,
       severity: balance < 0.92 ? 'critical' : 'warning',
       headline: `The grid is ${((1 - balance) * 100).toFixed(1)}% short of demand`,
-      detail: `A shortfall does not just mean blackouts — it directly suppresses GDP growth and feeds inflation every single month it persists. This is the cheapest problem on this list to fix and the most expensive to ignore.`,
+      detail: `A shortfall does not just mean blackouts — it directly suppresses GDP growth and feeds inflation every single month it persists. Below 90% it opens an energy emergency that escalates on its own. This is the cheapest problem on this list to fix and the most expensive to ignore.`,
       panel: 'construction',
       action: plant
         ? { kind: 'build', id: plant, label: `Build ${BUILDING_INDEX[plant].name}` }
@@ -238,9 +313,21 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
       detail:
         s.monthsToElection > 0 && s.monthsToElection < 24
           ? `We are ${s.monthsToElection} months from an election polling at ${s.approval.toFixed(0)}%. We need something visible and we need it now.`
-          : `The public has stopped listening. An address costs almost nothing and buys us a hearing; whether we deserve it depends on what we do next.`,
+          : `The public has stopped listening, and political capital income falls with approval — which means everything you want to do next gets more expensive too. An address costs almost nothing and buys us a hearing.`,
       panel: 'politics',
       action: ready ? { kind: 'decree', id: 'national-address', label: 'Address the nation' } : undefined,
+    });
+  }
+
+  if (s.governance.capital < 8 && s.turn > 6) {
+    push({
+      from: 'adv-comms',
+      id: 'no-capital',
+      urgency: 58,
+      severity: 'warning',
+      headline: `Only ${Math.floor(s.governance.capital)} political capital left`,
+      detail: `Without capital you cannot pass legislation, issue decrees or declare a plan — the government still exists but it cannot do anything. Income is ${s.governance.capitalPerMonth.toFixed(1)} a month and it rises with approval, mandate and the legislature's goodwill. Fixing those is the only way back.`,
+      panel: 'politics',
     });
   }
 
@@ -272,7 +359,9 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
         ? { kind: 'decree', id: 'anti-corruption-purge', label: 'Anti-corruption purge' }
         : policyAvailability(s, 'anti-corruption-agency').enabled
           ? { kind: 'policy', id: 'anti-corruption-agency', label: 'Establish an anti-corruption agency' }
-          : undefined,
+          : policyAvailability(s, 'civil-service-reform').enabled
+            ? { kind: 'policy', id: 'civil-service-reform', label: 'Reform the civil service' }
+            : undefined,
     });
   }
 
@@ -292,24 +381,104 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
     });
   }
 
+  /* ------------------------------ Factions ------------------------------ */
+
+  const hostile = hostileFactions(s);
+  const army = s.factions.find((f) => f.id === 'military');
+  if (army && army.satisfaction < 28 && army.influence > 12) {
+    push({
+      from: 'adv-defence',
+      id: 'army-hostile',
+      urgency: 105,
+      severity: 'critical',
+      headline: `The armed forces are at ${army.satisfaction.toFixed(0)} satisfaction`,
+      detail: `The officer corps has stopped regarding this government as theirs. With ${army.influence.toFixed(0)}% of national influence behind them, that is not a morale problem — it is the precondition for a coup. Defence funding is the fastest thing that moves it.`,
+      panel: 'factions',
+      action: {
+        kind: 'budget',
+        dept: 'military',
+        level: Math.min(3.5, Math.round((s.budget.military.level + 0.25) * 20) / 20),
+        label: `Raise defence funding to ${((s.budget.military.level + 0.25) * 100).toFixed(0)}%`,
+      },
+    });
+  } else if (hostile.length > 0) {
+    const worst = hostile[0];
+    const def = FACTION_INDEX[worst.id];
+    push({
+      from: 'adv-interior',
+      id: `faction-${worst.id}`,
+      urgency: 52 + worst.influence,
+      severity: worst.satisfaction < 18 ? 'warning' : 'opportunity',
+      headline: `${def?.name ?? worst.id} are hostile (${worst.satisfaction.toFixed(0)} / 100)`,
+      detail: `They hold ${worst.influence.toFixed(0)}% of national influence and they are actively working against us — that shows up as a permanent negative modifier on everything they touch. What they want: ${def?.blurb ?? 'to be taken seriously'}.`,
+      panel: 'factions',
+    });
+  }
+
   /* ------------------------------ Research ------------------------------ */
 
-  if (!s.research.current) {
-    const next = TECHNOLOGIES.filter(
-      (t) => !s.research.completed.includes(t.id) && t.requires.every((r) => s.research.completed.includes(r)),
-    ).sort((a, b) => a.cost - b.cost)[0];
+  const capacity = researchCapacity(s);
+  const idleSlots = capacity - s.research.active.length;
+  if (idleSlots > 0) {
+    const next = startableTechs(s).sort((a, b) => a.cost - b.cost)[0];
     if (next) {
       push({
         from: 'adv-science',
         id: 'idle-research',
-        urgency: 55,
+        urgency: 55 + idleSlots * 6,
         severity: 'warning',
-        headline: 'No research programme is running',
-        detail: `We are generating ${Math.round(s.research.perMonth)} research points a month and spending them on nothing. ${next.name} is the cheapest thing we can start today.`,
+        headline:
+          idleSlots === capacity
+            ? 'No research programme is running'
+            : `${idleSlots} of ${capacity} laboratories are idle`,
+        detail: `We are generating ${Math.round(s.research.perMonth)} research points a month${
+          idleSlots === capacity ? ' and spending them on nothing' : ' and only part of it is being used'
+        }. ${next.name} is the cheapest thing we can start today${
+          s.research.points > 200 ? `, and we have ${Math.floor(s.research.points).toLocaleString()} banked points that go straight into it.` : '.'
+        }`,
         panel: 'research',
         action: { kind: 'research', id: next.id, label: `Research ${next.name}` },
       });
     }
+  }
+
+  // The parallelism unlock itself — the single highest-leverage thing a
+  // science-minded campaign can do, and easy to miss.
+  //
+  // Anything already being pursued is filtered out: advising the player to
+  // start something that is already running or queued is worse than silence.
+  const startableIds = new Set(startableTechs(s).map((t) => t.id));
+  const locked = lockedSlotSources(s).filter((source) => {
+    if (source.kind === 'tech') {
+      return !s.research.active.some((p) => p.techId === source.id) && !s.research.queue.includes(source.id);
+    }
+    if (source.kind === 'building') {
+      return !s.construction.some((c) => c.buildingId === source.id);
+    }
+    return true;
+  });
+
+  if (locked.length > 0 && capacity < 3 && s.turn > 12) {
+    const nextSlot = locked[0];
+    const canResearch = nextSlot.kind === 'tech' && startableIds.has(nextSlot.id);
+    const canBuild = nextSlot.kind === 'building' && buildAvailability(s, nextSlot.id).enabled;
+    const canEnact = nextSlot.kind === 'policy' && policyAvailability(s, nextSlot.id).enabled;
+    push({
+      from: 'adv-science',
+      id: 'unlock-parallel-research',
+      urgency: 44,
+      severity: 'opportunity',
+      headline: `We can only run ${capacity} research programme${capacity === 1 ? '' : 's'} at a time`,
+      detail: `${nextSlot.label} would let us run one more in parallel. It does not make research faster in total — it lets us keep two branches of the tree moving instead of finishing one before we can touch the other, and it stops output being stranded whenever a project completes mid-month.`,
+      panel: nextSlot.kind === 'building' ? 'construction' : nextSlot.kind === 'policy' ? 'policies' : 'research',
+      action: canResearch
+        ? { kind: 'research', id: nextSlot.id, label: `Research ${TECH_INDEX[nextSlot.id].name}` }
+        : canBuild
+          ? { kind: 'build', id: nextSlot.id, label: `Build ${BUILDING_INDEX[nextSlot.id].name}` }
+          : canEnact
+            ? { kind: 'policy', id: nextSlot.id, label: `Enact ${POLICY_INDEX[nextSlot.id].name}` }
+            : undefined,
+    });
   }
 
   /* ------------------------------- Cabinet ------------------------------ */
@@ -346,6 +515,21 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
     });
   }
 
+  if (s.environment.waterStress > 68) {
+    push({
+      from: 'adv-environment',
+      id: 'water-stress',
+      urgency: 40 + (s.environment.waterStress - 68),
+      severity: s.environment.waterStress > 80 ? 'warning' : 'opportunity',
+      headline: `Water stress is at ${s.environment.waterStress.toFixed(0)}`,
+      detail: `Above 74 this opens a water crisis that escalates through rationing to agricultural failure. Desalination and environmental funding both push it back down, and both are far cheaper before the crisis than during it.`,
+      panel: 'environment',
+      action: buildAvailability(s, 'desalination-plant').enabled
+        ? { kind: 'build', id: 'desalination-plant', label: 'Build a desalination plant' }
+        : undefined,
+    });
+  }
+
   /* ------------------------------ Diplomacy ----------------------------- */
 
   const relations = averageRelations(s);
@@ -358,6 +542,37 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
       headline: `Average relations are ${relations.toFixed(0)}`,
       detail: `We are diplomatically isolated. That costs us trade volume, closes off treaties and organisations, and leaves us without friends the day we need one. Aid is crude but it works.`,
       panel: 'diplomacy',
+    });
+  }
+
+  const sanctioning = s.nations.filter((n) => n.sanctioningPlayer);
+  if (sanctioning.length >= 2) {
+    push({
+      from: 'adv-foreign',
+      id: 'sanctioned',
+      urgency: 62,
+      severity: 'warning',
+      headline: `${sanctioning.length} nations are sanctioning us`,
+      detail: `${sanctioning.slice(0, 3).map((n) => n.name).join(', ')}${sanctioning.length > 3 ? ' and others' : ''} have closed trade with us. That is real money out of the budget every month and it compounds: sanctions raise their threat perception, which makes more of them likely.`,
+      panel: 'diplomacy',
+    });
+  }
+
+  const threat = s.nations
+    .filter((n) => !n.atWarWithPlayer && n.relations < -45 && n.militaryStrength > s.military.strength * 1.05)
+    .sort((a, b) => a.relations - b.relations)[0];
+  if (threat && s.settings.enableWars) {
+    push({
+      from: 'adv-defence',
+      id: 'invasion-risk',
+      urgency: 88,
+      severity: 'warning',
+      headline: `${threat.name} is hostile and stronger than us`,
+      detail: `Relations are at ${threat.relations.toFixed(0)} and their forces outmatch ours. A defence pact with anyone credible, a non-aggression pact with them, or simply closing the capability gap all reduce the chance they act. Doing none of those is a decision too.`,
+      panel: 'military',
+      action: decreeAvailability(s, 'mobilise-reserves').enabled
+        ? { kind: 'decree', id: 'mobilise-reserves', label: 'Mobilise the reserves' }
+        : undefined,
     });
   }
 
@@ -387,7 +602,7 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
       urgency: 30,
       severity: 'opportunity',
       headline: `We are short of ${shortages.length} commodities`,
-      detail: `We buy these on the open market at whatever it costs that month. Standing import agreements with friendly producers would fix the price and secure the supply.`,
+      detail: `We buy these on the open market at whatever it costs that month. Standing import agreements with friendly producers would fix the price and secure the supply — and world prices climb with global tension, which is currently ${s.world.tension.toFixed(0)}.`,
       panel: 'trade',
     });
   }
@@ -410,6 +625,61 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
     });
   }
 
+  /* ----------------------------- Provinces ------------------------------ */
+
+  const separatist = [...s.provinces].sort((a, b) => b.separatism - a.separatism)[0];
+  if (separatist && separatist.separatism > 45) {
+    push({
+      from: 'adv-interior',
+      id: 'separatism',
+      urgency: 50 + separatist.separatism,
+      severity: separatist.separatism > 60 ? 'warning' : 'opportunity',
+      headline: `${separatist.name} is at ${separatist.separatism.toFixed(0)} separatism`,
+      detail: `Above 62 a secession movement opens and it is very expensive to close. Devolution is the durable answer and it costs political capital rather than money; standing investment works more slowly but does not weaken the centre.`,
+      panel: 'provinces',
+    });
+  }
+
+  /* ------------------------------- Agenda ------------------------------- */
+
+  if (!s.agenda && s.governance.capital >= AGENDA_DECLARATION_COST && s.turn > 18) {
+    // Recommend the plan the country is already closest to delivering — a
+    // committed target should be a stretch, not a fantasy.
+    const candidate = AGENDAS.find((a) => {
+      if (s.agendasCompleted.includes(a.id)) return false;
+      if (a.metric === 'militaryStrength' && s.military.strength > 85) return false;
+      if (a.metric === 'corruption' && s.corruption < 20) return false;
+      if (a.metric === 'unemployment' && s.economy.unemployment < 4) return false;
+      return true;
+    });
+    if (candidate) {
+      push({
+        from: '',
+        id: 'declare-agenda',
+        urgency: 34,
+        severity: 'opportunity',
+        headline: 'No five-year plan is running',
+        detail: `We have ${Math.floor(s.governance.capital)} political capital and nothing staked on a public target. A plan costs ${AGENDA_DECLARATION_COST} capital, imposes a real handicap while it runs, and pays a permanent bonus if we deliver it. ${candidate.name} fits where the country is now.`,
+        panel: 'objectives',
+        action: { kind: 'agenda', id: candidate.id, label: `Declare ${candidate.name}` },
+      });
+    }
+  } else if (s.agenda) {
+    const def = AGENDA_INDEX[s.agenda.defId];
+    const monthsLeft = s.agenda.endsTurn - s.turn;
+    if (def && monthsLeft <= 18 && monthsLeft > 0) {
+      push({
+        from: '',
+        id: 'agenda-deadline',
+        urgency: 58,
+        severity: 'warning',
+        headline: `${def.name}: ${monthsLeft} months left`,
+        detail: `The target was published and it will be judged. Missing it costs approval, mandate and momentum; hitting it is a permanent gain. Everything that moves ${def.metric} is worth doing now, not later.`,
+        panel: 'objectives',
+      });
+    }
+  }
+
   /* ----------------------------- Objectives ----------------------------- */
 
   const progress = victoryProgress(s);
@@ -427,6 +697,8 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
   }
 
   /* -------------------------- Idle opportunity -------------------------- */
+  // The board must never be empty. If nothing is wrong, there is always
+  // something worth building, joining or committing to next.
 
   if (out.length < limit && s.economy.treasury > gdpMonthly * 0.8) {
     const wonder = BUILDINGS.filter((b) => b.category === 'wonder' && buildAvailability(s, b.id).enabled)[0];
@@ -456,10 +728,60 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
     }
   }
 
+  if (out.length < limit && s.economy.sovereignFund <= 0 && s.economy.treasury > gdpMonthly * 1.2) {
+    push({
+      from: 'adv-finance',
+      id: 'start-fund',
+      urgency: 18,
+      severity: 'opportunity',
+      headline: 'The sovereign wealth fund is empty',
+      detail: `Cash in the treasury earns nothing. The fund compounds at roughly ${s.economy.fundReturn.toFixed(1)}% a year and, because it tracks the world cycle rather than ours, it is worth most exactly when the domestic economy is worst. The catch is that money in it is not spendable until you withdraw it.`,
+      panel: 'budget',
+    });
+  }
+
+  if (out.length < limit) {
+    // Absolute fallback: the next cheapest technology that is genuinely new.
+    // The board is never allowed to be empty — there is always a next thing.
+    const startable = startableTechs(s).sort((a, b) => a.cost - b.cost)[0];
+    const next =
+      startable ??
+      TECHNOLOGIES.filter(
+        (t) =>
+          !s.research.completed.includes(t.id) &&
+          !s.research.active.some((p) => p.techId === t.id) &&
+          !s.research.queue.includes(t.id),
+      ).sort((a, b) => a.cost - b.cost)[0];
+    if (next) {
+      push({
+        from: 'adv-science',
+        id: 'next-tech',
+        urgency: 10,
+        severity: 'opportunity',
+        headline: `${next.name} is the natural next step`,
+        detail: `Nothing is going wrong, which is the best time to raise the ceiling rather than the floor. ${next.description}`,
+        panel: 'research',
+        action: startable && startable.id === next.id
+          ? { kind: 'research', id: next.id, label: `Research ${next.name}` }
+          : undefined,
+      });
+    }
+  }
+
   return out.sort((a, b) => b.urgency - a.urgency).slice(0, limit);
 }
 
 /** Everything the cabinet would raise, not just the top few. */
 export function allRecommendations(s: GameState): Recommendation[] {
   return buildRecommendations(s, 99);
+}
+
+/**
+ * The single most valuable thing to do right now.
+ *
+ * Used by the persistent "next move" strip so there is always one clear
+ * answer to "what should I do?" without opening a panel.
+ */
+export function nextBestAction(s: GameState): Recommendation | null {
+  return buildRecommendations(s, 1)[0] ?? null;
 }

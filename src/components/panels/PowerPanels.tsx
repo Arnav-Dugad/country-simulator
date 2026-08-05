@@ -4,7 +4,9 @@ import {
 } from 'recharts';
 import { Ban, Handshake, Radar as RadarIcon, Search, Send, Shield, Swords, Target } from 'lucide-react';
 import clsx from 'clsx';
-import type { CovertOp, ForeignNation, GameState, MilitaryState, OrgId, TreatyType, WarGoal } from '../../game/types';
+import type {
+  CovertOp, ForeignNation, GameState, MilitaryBranch, MilitaryState, OrgId, TreatyType, WarGoal,
+} from '../../game/types';
 import { ORGS } from '../../game/data/institutions';
 import { REGION_LABELS } from '../../game/data/countries';
 import { averageRelations, formatBillions, formatMoney, formatNumber, formatPopulation } from '../../game/selectors';
@@ -162,6 +164,10 @@ export function MilitaryPanel({ game }: { game: GameState }) {
             </Card>
           </Reveal>
 
+          <Reveal delay={0.12}>
+            <BranchFundingCard game={game} />
+          </Reveal>
+
           <Reveal delay={0.14}>
             <Card title="Readiness" icon="📊">
               <div className="space-y-3.5">
@@ -184,6 +190,10 @@ export function MilitaryPanel({ game }: { game: GameState }) {
                 ))}
               </div>
             </Card>
+          </Reveal>
+
+          <Reveal delay={0.16}>
+            <NuclearProgrammeCard game={game} />
           </Reveal>
         </div>
       </div>
@@ -213,6 +223,133 @@ export function MilitaryPanel({ game }: { game: GameState }) {
   );
 }
 
+/* --------------------------- Branch funding ---------------------------- */
+
+const BRANCH_META: { id: MilitaryBranch; label: string; icon: string; blurb: string }[] = [
+  { id: 'army', label: 'Army', icon: '🪖', blurb: 'Holds ground and holds provinces. The branch counter-insurgency runs on.' },
+  { id: 'navy', label: 'Navy', icon: '⚓', blurb: 'Projects force and protects the trade your economy depends on.' },
+  { id: 'airForce', label: 'Air Force', icon: '✈️', blurb: 'The decisive arm in a conventional war, and the most expensive per unit.' },
+  { id: 'cyber', label: 'Cyber', icon: '💻', blurb: 'Cheap, deniable, and it feeds intelligence capability directly.' },
+  { id: 'space', label: 'Space', icon: '🛰️', blurb: 'Sensors, navigation and the deterrent architecture above everything else.' },
+];
+
+/**
+ * Branch emphasis.
+ *
+ * These are weights on the same defence budget, not extra money. Raising one
+ * branch genuinely pulls capability out of the others, which is the trade-off
+ * the doctrine choice alone could not express.
+ */
+function BranchFundingCard({ game }: { game: GameState }) {
+  const { setBranchFunding } = useGameStore();
+  const funding = game.military.branchFunding;
+  const total = BRANCH_META.reduce((sum, b) => sum + (funding[b.id] ?? 1), 0) || 1;
+
+  return (
+    <Card
+      title="Branch emphasis"
+      subtitle="A split of the same defence budget — raising one arm starves the others"
+      icon="⚖️"
+    >
+      <div className="space-y-3">
+        {BRANCH_META.map((branch) => {
+          const weight = funding[branch.id] ?? 1;
+          const share = ((weight / total) * 100).toFixed(0);
+          return (
+            <div key={branch.id}>
+              <div className="mb-1 flex items-baseline justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs text-slate-300">
+                  <span>{branch.icon}</span>
+                  {branch.label}
+                </span>
+                <span className="num text-[11px] text-slate-400">
+                  {share}% of effort · capability {game.military[branch.id].toFixed(0)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0.25}
+                max={2.5}
+                step={0.05}
+                value={weight}
+                onChange={(e) => setBranchFunding(branch.id, Number(e.target.value))}
+                className="focus-ring"
+                aria-label={`${branch.label} emphasis`}
+              />
+              <p className="mt-0.5 text-[10px] leading-relaxed text-slate-600">{branch.blurb}</p>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+        Every adjustment costs a little readiness while units re-role. To raise every branch at once you
+        need a bigger defence budget, not a different split.
+      </p>
+    </Card>
+  );
+}
+
+/* -------------------------- Nuclear programme -------------------------- */
+
+/**
+ * An indigenous weapons programme.
+ *
+ * Slow, expensive, and diplomatically ruinous by design: it consumes a slice of
+ * the defence budget every month it runs, and the first device costs relations
+ * with every nation on earth.
+ */
+function NuclearProgrammeCard({ game }: { game: GameState }) {
+  const { setNuclearProgramme } = useGameStore();
+  const hasTech = game.research.completed.includes('nuclear-weapons');
+  const m = game.military;
+
+  return (
+    <Card
+      title="Strategic weapons"
+      icon="☢️"
+      subtitle={
+        m.nuclearWarheads > 0
+          ? `${m.nuclearWarheads} warhead${m.nuclearWarheads === 1 ? '' : 's'} in the stockpile`
+          : 'No deployed deterrent'
+      }
+      action={<Badge tone={m.nuclearProgrammeActive ? 'warn' : 'neutral'}>{m.nuclearProgrammeActive ? 'Running' : 'Halted'}</Badge>}
+    >
+      {!hasTech ? (
+        <p className="text-xs leading-relaxed text-slate-400">
+          A weapons programme requires the <span className="font-semibold text-white">Nuclear Weapons</span>{' '}
+          technology, which itself needs Precision Munitions and Civil Nuclear Power. Until then there is
+          nothing to build.
+        </p>
+      ) : (
+        <>
+          <div className="mb-3">
+            <div className="mb-1 flex items-baseline justify-between">
+              <span className="text-xs text-slate-300">Next device</span>
+              <span className="num text-xs font-semibold text-white">{m.nuclearProgramme.toFixed(0)}%</span>
+            </div>
+            <Meter value={m.nuclearProgramme} height={5} color="#ffb648" />
+          </div>
+          <p className="text-[11px] leading-relaxed text-slate-400">
+            While the programme runs it consumes roughly half a month of the defence baseline and slowly
+            erodes soft power. The first device costs relations with every nation and raises how threatened
+            they feel by you permanently. What it buys is that almost nobody will start a war with you.
+          </p>
+          <div className="mt-3">
+            <Button
+              size="sm"
+              variant={m.nuclearProgrammeActive ? 'ghost' : 'primary'}
+              full
+              onClick={() => setNuclearProgramme(!m.nuclearProgrammeActive)}
+            >
+              {m.nuclearProgrammeActive ? 'Halt the programme' : 'Authorise the programme'}
+            </Button>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 /* =============================== Diplomacy ============================== */
 
 const TREATY_OPTIONS: { type: TreatyType; label: string; minRelations: number }[] = [
@@ -223,6 +360,92 @@ const TREATY_OPTIONS: { type: TreatyType; label: string; minRelations: number }[
   { type: 'defense', label: 'Defence pact', minRelations: 50 },
   { type: 'alliance', label: 'Full alliance', minRelations: 65 },
 ];
+
+/**
+ * Unsolicited proposals from abroad.
+ *
+ * These are what make the world feel like it has its own intentions rather
+ * than merely reacting to yours: nations come to you with treaties, contracts,
+ * requests and demands, and each one lapses on a clock whether or not you look
+ * at it. Ignoring a demand is not the same as refusing it, but it is not free.
+ */
+function OfferInbox({ game }: { game: GameState }) {
+  const { acceptOffer, declineOffer } = useGameStore();
+  const symbol = game.identity.currency.symbol;
+
+  return (
+    <Card
+      title="Diplomatic inbox"
+      subtitle="Proposals from other governments. Each expires on its own."
+      icon="✉️"
+      action={<Badge tone="warn">{game.offers.length}</Badge>}
+    >
+      <div className="space-y-3">
+        {game.offers.map((offer) => {
+          const nation = game.nations.find((n) => n.id === offer.countryId);
+          const hostile = offer.kind === 'demand' || offer.kind === 'ultimatum';
+          const monthsLeft = Math.max(0, offer.expiresTurn - game.turn);
+          const unaffordable = offer.amount !== undefined && game.economy.treasury < offer.amount;
+
+          return (
+            <div
+              key={offer.id}
+              className={clsx(
+                'rounded-xl border p-3.5',
+                hostile ? 'border-aurora-red/30 bg-aurora-red/[0.05]' : 'border-white/10 bg-white/[0.03]',
+              )}
+            >
+              <div className="flex items-start gap-3">
+                {nation && <Flag iso2={nation.iso2} width={80} className="h-7 w-10 shrink-0" title={nation.name} />}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className={clsx('text-xs font-semibold', hostile ? 'text-aurora-red' : 'text-white')}>
+                      {offer.title}
+                    </p>
+                    <span className="num shrink-0 text-[10px] text-slate-500">
+                      {monthsLeft} month{monthsLeft === 1 ? '' : 's'} to answer
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-300">{offer.body}</p>
+
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-500">
+                    {offer.amount !== undefined && (
+                      <span className="num">Cost {formatMoney(offer.amount, symbol)}</span>
+                    )}
+                    <span className={clsx('num', offer.acceptRelations >= 0 ? 'text-aurora-lime' : 'text-aurora-red')}>
+                      Accept: relations {offer.acceptRelations >= 0 ? '+' : ''}
+                      {offer.acceptRelations}
+                    </span>
+                    <span className={clsx('num', offer.refuseRelations >= 0 ? 'text-aurora-lime' : 'text-aurora-red')}>
+                      Decline: relations {offer.refuseRelations >= 0 ? '+' : ''}
+                      {offer.refuseRelations}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Tooltip label={unaffordable ? 'The treasury cannot cover it' : 'Accept the proposal'}>
+                      <Button
+                        size="sm"
+                        variant={hostile ? 'secondary' : 'primary'}
+                        disabled={unaffordable}
+                        onClick={() => acceptOffer(offer.id)}
+                      >
+                        Accept
+                      </Button>
+                    </Tooltip>
+                    <Button size="sm" variant="ghost" onClick={() => declineOffer(offer.id)}>
+                      Decline
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
 
 export function DiplomacyPanel({ game }: { game: GameState }) {
   const store = useGameStore();
@@ -248,9 +471,20 @@ export function DiplomacyPanel({ game }: { game: GameState }) {
           <Stat label="Average relations" value={averageRelations(game).toFixed(0)} accent="#4f8cff" />
           <Stat label="Treaties" value={game.treaties.length} accent="#7ee787" />
           <Stat label="Organisations" value={`${game.orgs.length} / ${ORGS.length}`} accent="#f5d073" />
-          <Stat label="Soft power" value={game.society.softPower.toFixed(0)} accent="#9d6bff" />
+          <Stat
+            label="Proposals waiting"
+            value={game.offers.length}
+            hint={game.offers.length > 0 ? 'They expire whether or not you answer' : 'Nothing on the desk'}
+            accent={game.offers.length > 0 ? '#ffb648' : '#9d6bff'}
+          />
         </div>
       </Reveal>
+
+      {game.offers.length > 0 && (
+        <Reveal delay={0.03}>
+          <OfferInbox game={game} />
+        </Reveal>
+      )}
 
       <Reveal delay={0.04}>
         <Tabs

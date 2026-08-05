@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import type { GameState, SetupConfig } from '../game/types';
@@ -36,6 +36,9 @@ import { ConstructionPanel, ResearchPanel } from '../components/panels/ProgressP
 import { EnvironmentPanel, SocietyPanel } from '../components/panels/SocietyPanels';
 import { DiplomacyPanel, IntelligencePanel, MilitaryPanel } from '../components/panels/PowerPanels';
 import { AchievementsPanel, HistoryPanel, ObjectivesPanel } from '../components/panels/MetaPanels';
+import { CrisisPanel } from '../components/panels/CrisisPanel';
+import { FactionsPanel } from '../components/panels/FactionsPanel';
+import { WorldPanel } from '../components/panels/WorldPanel';
 
 /** Fails the test if the component tree logged a React error while rendering. */
 let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
@@ -139,6 +142,9 @@ const PANELS: { id: PanelId; label: string; Component: (props: { game: GameState
   { id: 'intelligence', label: 'Intelligence', Component: IntelligencePanel },
   { id: 'achievements', label: 'Achievements', Component: AchievementsPanel },
   { id: 'history', label: 'Chronicle', Component: HistoryPanel },
+  { id: 'crises', label: 'Crisis Room', Component: CrisisPanel },
+  { id: 'factions', label: 'Interest Groups', Component: FactionsPanel },
+  { id: 'world', label: 'World Report', Component: WorldPanel },
 ];
 
 describe('panels', () => {
@@ -217,11 +223,56 @@ describe('game shell', () => {
 
     const nav = document.querySelector('aside nav');
     expect(nav).not.toBeNull();
-    const research = within(nav as HTMLElement).getByRole('button', { name: /Research/i });
-    await user.click(research);
+    // Each nav row now carries a pin button as well, and the nav label can pick
+    // up a badge count, so target the label element and click its button.
+    const researchLabel = within(nav as HTMLElement).getByText('Research');
+    const research = researchLabel.closest('button');
+    expect(research).not.toBeNull();
+    await user.click(research as HTMLElement);
     expect(useUiStore.getState().panel).toBe('research');
 
     expectNoReactErrors('game shell');
+  });
+
+  it('never blanks the body when panels are switched rapidly', async () => {
+    // Regression: the shell used to wrap the panel body in an
+    // `AnimatePresence mode="wait"`. Switching tabs while the previous panel
+    // was still animating out could leave the new one unmounted, so the
+    // content area went empty and stayed empty. Nothing waits to be removed
+    // now, so a burst of switches must always leave something rendered.
+    const game = matureGame();
+    useGameStore.setState({ game, playing: false });
+    useUiStore.setState({ panel: 'dashboard' });
+
+    const { rerender, container } = render(
+      <MemoryRouter>
+        <GameShell game={game}>
+          <div data-testid="panel-body">dashboard</div>
+        </GameShell>
+      </MemoryRouter>,
+    );
+
+    const order: PanelId[] = [
+      'economy', 'research', 'crises', 'factions', 'world', 'budget', 'military', 'dashboard',
+    ];
+    for (const panel of order) {
+      act(() => {
+        useUiStore.getState().setPanel(panel);
+      });
+      rerender(
+        <MemoryRouter>
+          <GameShell game={game}>
+            <div data-testid="panel-body">{panel}</div>
+          </GameShell>
+        </MemoryRouter>,
+      );
+      // The body must be present and carrying the current panel, every time.
+      const body = container.querySelector('[data-testid="panel-body"]');
+      expect(body, `panel body vanished switching to ${panel}`).not.toBeNull();
+      expect(body?.textContent).toBe(panel);
+    }
+
+    expectNoReactErrors('rapid panel switching');
   });
 
   it('advances a month from the top bar', async () => {
@@ -521,10 +572,18 @@ describe('advisory board', () => {
     }
 
     const remaining = allRecommendations(game);
-    expect(remaining.map((r) => r.id), 'the fixture should give the cabinet nothing to raise').toEqual([]);
+
+    // Nothing is *wrong* — no emergency and no warning should survive.
+    const pressing = remaining.filter((r) => r.severity !== 'opportunity');
+    expect(pressing.map((r) => r.id), 'a well-run country should have nothing pressing').toEqual([]);
+
+    // But the board is contractually never silent: with nothing to fix it must
+    // still propose the best thing to do next, because there always is one.
+    expect(remaining.length, 'the board must always offer a next step').toBeGreaterThan(0);
+    expect(remaining.every((r) => r.severity === 'opportunity')).toBe(true);
 
     render(<AdvisoryBoard game={game} limit={3} />);
-    expect(screen.getByText(/Nothing pressing/i)).toBeTruthy();
+    expect(screen.getByText(remaining[0].headline)).toBeTruthy();
     expectNoReactErrors('quiet advisory board');
   });
 });

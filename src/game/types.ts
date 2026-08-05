@@ -317,6 +317,13 @@ export interface Policy {
   conflicts?: string[];
   /** Ideologies that gain/lose approval when this is enacted. */
   ideologyAppeal?: Partial<Record<IdeologyId, number>>;
+  /**
+   * Political capital required to pass it, before legislative friction.
+   * Derived from the policy's reach when not stated explicitly.
+   */
+  politicalCost?: number;
+  /** How each interest group reacts to it, -20..20. */
+  factionAppeal?: Partial<Record<FactionId, number>>;
 }
 
 export type TechBranch =
@@ -574,6 +581,265 @@ export interface ForeignNation {
    * what this nation can plausibly sell you and what it needs to buy.
    */
   resources: Partial<Record<ResourceId, number>>;
+
+  /**
+   * What this nation is currently trying to achieve. Drives whether it courts
+   * you, sanctions you, arms itself against you, or ignores you entirely.
+   */
+  agenda: NationAgenda;
+  /** Country ids this nation is at war with, excluding the player. */
+  warsWith: string[];
+  /** Bloc alignment, or null for non-aligned. */
+  bloc: BlocId | null;
+  /** How threatened this nation feels by the player, 0–100. */
+  threatPerception: number;
+  /** Whether they are currently sanctioning the player. */
+  sanctioningPlayer: boolean;
+}
+
+export type NationAgenda =
+  | 'expansion'
+  | 'trade'
+  | 'isolation'
+  | 'rearmament'
+  | 'influence'
+  | 'development';
+
+export type BlocId = 'western' | 'eastern' | 'non-aligned' | 'southern';
+
+/**
+ * An unsolicited proposal from a foreign government.
+ *
+ * These are what make the world feel like it has its own intentions: nations
+ * come to you with offers, demands and ultimatums that expire whether or not
+ * you look at them.
+ */
+export interface DiplomaticOffer {
+  id: string;
+  countryId: string;
+  kind: 'treaty' | 'trade' | 'aid-request' | 'demand' | 'ultimatum' | 'join-war';
+  /** Set for treaty offers. */
+  treatyType?: TreatyType;
+  /** Set for commodity offers. */
+  resource?: ResourceId;
+  direction?: 'import' | 'export';
+  quantity?: number;
+  price?: number;
+  termMonths?: number;
+  /** Millions USD, for aid requests and demands. */
+  amount?: number;
+  /** Third party, for join-war offers. */
+  targetId?: string;
+  /** Player-facing text. */
+  title: string;
+  body: string;
+  /** Relations swing on acceptance and on refusal. */
+  acceptRelations: number;
+  refuseRelations: number;
+  /** Turn after which the offer lapses on its own. */
+  expiresTurn: number;
+}
+
+/** A war between two AI nations, which the player can be dragged into. */
+export interface ForeignWar {
+  id: string;
+  aId: string;
+  bId: string;
+  startTurn: number;
+  /** Positive means `aId` is winning. */
+  score: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Interest groups                                                     */
+/* ------------------------------------------------------------------ */
+
+export type FactionId =
+  | 'business'
+  | 'labour'
+  | 'military'
+  | 'clergy'
+  | 'intelligentsia'
+  | 'regions';
+
+export interface FactionDef {
+  id: FactionId;
+  name: string;
+  icon: string;
+  description: string;
+  /** What pleases them. Compared against the live state each month. */
+  blurb: string;
+  /** Modifiers applied at full satisfaction, scaled linearly from 50. */
+  pleasedModifiers: Modifiers;
+  /** Modifiers applied at zero satisfaction, scaled linearly from 50. */
+  angeredModifiers: Modifiers;
+}
+
+export interface FactionState {
+  id: FactionId;
+  /** 0–100. Below 30 they actively work against you. */
+  satisfaction: number;
+  /** 0–100 share of national influence. Scales how much their mood matters. */
+  influence: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Crises                                                              */
+/* ------------------------------------------------------------------ */
+
+export type CrisisCategory =
+  | 'economic'
+  | 'political'
+  | 'security'
+  | 'health'
+  | 'environmental'
+  | 'social';
+
+export interface CrisisStageDef {
+  label: string;
+  /** Months this stage lasts before escalating. */
+  months: number;
+  /** Per-month modifiers while the crisis sits in this stage. */
+  modifiers: Modifiers;
+  /** Narrative shown while the crisis is at this stage. */
+  description: string;
+}
+
+export interface CrisisResponseDef {
+  id: string;
+  label: string;
+  description: string;
+  /** Millions USD at the reference economy size. */
+  cost: number;
+  /** Political capital spent. */
+  politicalCost: number;
+  /** Reduction in crisis severity, 0–100. */
+  severityRelief: number;
+  effects?: EventEffects;
+  requires?: { tech?: string[]; minStability?: number; minMilitary?: number };
+  /** 0–1 chance the response achieves nothing. */
+  riskChance?: number;
+}
+
+export interface CrisisDef {
+  id: string;
+  name: string;
+  icon: string;
+  category: CrisisCategory;
+  summary: string;
+  /** Gate: the crisis can only begin when this holds. */
+  trigger: (s: GameState) => boolean;
+  /** Relative weight once eligible. */
+  weight: number;
+  /** Months before the same crisis can recur. */
+  cooldown: number;
+  stages: CrisisStageDef[];
+  responses: CrisisResponseDef[];
+  /** Applied once when the crisis reaches its final stage unresolved. */
+  climax: EventEffects;
+}
+
+export interface ActiveCrisis {
+  /** Unique per occurrence. */
+  id: string;
+  defId: string;
+  startedTurn: number;
+  /** Index into the definition's `stages`. */
+  stage: number;
+  /** Months spent in the current stage. */
+  monthsInStage: number;
+  /** 0–100. Falls when you respond, climbs when you do not. */
+  severity: number;
+  /** Response ids already used, so each is only available once. */
+  responsesUsed: string[];
+}
+
+/* ------------------------------------------------------------------ */
+/* National agenda                                                     */
+/* ------------------------------------------------------------------ */
+
+export type AgendaMetric =
+  | 'gdpPerCapita'
+  | 'happiness'
+  | 'militaryStrength'
+  | 'renewableShare'
+  | 'researchCompleted'
+  | 'approval'
+  | 'corruption'
+  | 'unemployment'
+  | 'softPower'
+  | 'infrastructure';
+
+export interface AgendaDef {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  metric: AgendaMetric;
+  /** Improvement required over the value when the plan was declared. */
+  improvement: number;
+  /** True when the metric should go *down* to succeed. */
+  lower?: boolean;
+  /** Modifiers granted while the plan runs — the cost of committing. */
+  duringModifiers: Modifiers;
+  /** Permanent modifiers granted on success. */
+  rewardModifiers: Modifiers;
+  /** Political capital granted on success. */
+  rewardCapital: number;
+}
+
+export interface ActiveAgenda {
+  defId: string;
+  startedTurn: number;
+  endsTurn: number;
+  /** Metric value when the plan was declared. */
+  baseline: number;
+  target: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Governance & political capital                                      */
+/* ------------------------------------------------------------------ */
+
+export interface GovernanceState {
+  /**
+   * Political capital. The second currency: money buys things, capital buys
+   * permission. Earned from approval, mandate and legislative goodwill; spent
+   * on policies, decrees and anything that overrides an institution.
+   */
+  capital: number;
+  /** Produced per month. Recomputed each tick. */
+  capitalPerMonth: number;
+  /** Ceiling on banked capital. Raised by government type and legitimacy. */
+  capitalCap: number;
+  /** How legitimate your government is considered to be, 0–100. */
+  mandate: number;
+  /** Share of the legislature that will vote with you, 0–100. */
+  legislativeSupport: number;
+  /** Recent wins and losses, -100..100. Feeds capital income. */
+  momentum: number;
+  /** Bills passed and blocked, for the chronicle. */
+  billsPassed: number;
+  billsBlocked: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* World                                                               */
+/* ------------------------------------------------------------------ */
+
+export interface WorldState {
+  /** Global geopolitical tension, 0–100. Drives war and crisis frequency. */
+  tension: number;
+  /** Global business cycle, -1 (deep recession) .. 1 (boom). */
+  cycle: number;
+  /** Trend the cycle is currently moving in. */
+  cyclePhase: 'expansion' | 'peak' | 'contraction' | 'trough';
+  /** World real growth this month, annualised %. */
+  globalGrowth: number;
+  /** Aggregate world GDP in billions, including the player. */
+  globalGdp: number;
+  /** Months until the cycle next turns. */
+  monthsToPhaseShift: number;
 }
 
 export type OrgId = 'un' | 'nato' | 'eu' | 'wto' | 'brics' | 'opec' | 'g20' | 'asean' | 'au' | 'paris-accord';
@@ -626,6 +892,16 @@ export interface Province {
   specialty: 'agriculture' | 'industry' | 'services' | 'tech' | 'mining' | 'tourism' | 'energy';
   autonomy: number; // 0-100, high values raise secession risk
   loyalty: number; // 0-100
+  /** Troops deployed to hold the province down. Costs money and liberties. */
+  martialLaw: boolean;
+  /**
+   * Secession pressure, 0–100. Built from unrest, autonomy and disloyalty over
+   * time rather than from any one month — a province leaves after years of
+   * neglect, not after one bad quarter.
+   */
+  separatism: number;
+  /** Standing monthly development spend directed here, in millions USD. */
+  investment: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -752,6 +1028,35 @@ export interface EconomyState {
   productivity: number;
   /** Local currency units per USD; drifts with inflation and confidence. */
   exchangeRate: number;
+
+  /**
+   * Sovereign wealth fund, in millions USD.
+   *
+   * Money moved here leaves the treasury and compounds at a market return
+   * instead of sitting idle. It cannot be spent directly — it has to be
+   * withdrawn first, which is the whole trade-off.
+   */
+  sovereignFund: number;
+  /** Annualised return the fund earned last month, in %. */
+  fundReturn: number;
+  /**
+   * Whether the central bank sets the policy rate itself.
+   *
+   * Independent banks follow a Taylor rule and are trusted by markets;
+   * a captured bank does what you tell it and is not.
+   */
+  centralBankIndependent: boolean;
+  /** Rate the player has ordered, used only when the bank is not independent. */
+  policyRateTarget: number;
+  /** Market yield on new sovereign debt, in %. Drives the interest bill. */
+  bondYield: number;
+  /**
+   * Whether surplus cash is swept into debt repayment automatically.
+   * On by default; turning it off lets the treasury build a war chest.
+   */
+  autoRepayDebt: boolean;
+  /** Cumulative real GDP index, 100 at the start. Immune to price effects. */
+  realIndex: number;
 }
 
 export type SectorId =
@@ -821,18 +1126,55 @@ export interface MilitaryState {
   /** Doctrine chosen at setup or later. */
   doctrine: 'defensive' | 'offensive' | 'deterrence' | 'expeditionary' | 'asymmetric';
   veterancy: number; // 0-100
+  /**
+   * How the defence budget is split between branches, 0–2 each.
+   *
+   * These are weights, not extra money: raising one branch's share pulls
+   * capability out of the others unless the whole budget goes up too.
+   */
+  branchFunding: Record<MilitaryBranch, number>;
+  /** Progress toward an indigenous warhead, 0–100. Only runs when funded. */
+  nuclearProgramme: number;
+  /** Whether the weapons programme is currently funded. */
+  nuclearProgrammeActive: boolean;
+}
+
+export type MilitaryBranch = 'army' | 'navy' | 'airForce' | 'cyber' | 'space';
+
+/** One technology being worked on in a research slot. */
+export interface ResearchProject {
+  techId: string;
+  /** Points accumulated toward this technology's cost. */
+  progress: number;
+  /** Share of monthly output directed here. Normalised across active slots. */
+  priority: number;
 }
 
 export interface ResearchState {
-  /** Accumulated points available to spend. */
+  /** Banked points. Output with nowhere to go accrues here and can be spent. */
   points: number;
   /** Points produced per month. */
   perMonth: number;
   completed: string[];
-  /** Currently researching tech id. */
+  /**
+   * Mirror of `active[0]`, maintained by the engine.
+   *
+   * Kept because a great deal of the game reads "what are we researching" as a
+   * single value, and because it lets a save written before parallel research
+   * existed load without a special case.
+   */
   current: string | null;
-  /** Progress toward `current`. */
+  /** Progress toward `current`. Mirror of `active[0].progress`. */
   progress: number;
+  /** Every project currently under way, one per occupied slot. */
+  active: ResearchProject[];
+  /** Technologies queued to start automatically as slots free up. */
+  queue: string[];
+  /**
+   * Concurrent research slots unlocked beyond the first. Raised by technology,
+   * policy and buildings — see `researchCapacity`.
+   */
+  bonusSlots: number;
 }
 
 export interface IntelligenceState {
@@ -842,6 +1184,14 @@ export interface IntelligenceState {
   /** Counter-intelligence rating. */
   counterIntel: number;
   networkCountries: string[];
+  /**
+   * How much you know about each nation, 0–100, keyed by country id.
+   *
+   * Low coverage hides a rival's true military strength and intentions behind
+   * an estimate; high coverage shows you the real numbers and warns you before
+   * they move against you.
+   */
+  dossiers: Record<string, number>;
 }
 
 export interface CovertOp {
@@ -888,6 +1238,10 @@ export interface HistoryPoint {
   emissions: number;
   militaryStrength: number;
   score: number;
+  /** Banked political capital, so the chronicle can chart it. */
+  politicalCapital: number;
+  /** Research output per month at this point. */
+  research: number;
 }
 
 export interface LogEntry {
@@ -896,7 +1250,16 @@ export interface LogEntry {
   year: number;
   month: number;
   text: string;
-  category: EventCategory | 'system' | 'policy' | 'build' | 'research' | 'election';
+  category:
+    | EventCategory
+    | 'system'
+    | 'policy'
+    | 'build'
+    | 'research'
+    | 'election'
+    | 'crisis'
+    | 'faction'
+    | 'world';
   tone: 'good' | 'bad' | 'neutral' | 'critical';
   icon?: string;
 }
@@ -932,7 +1295,10 @@ export type PanelTarget =
   | 'cabinet'
   | 'objectives'
   | 'achievements'
-  | 'history';
+  | 'history'
+  | 'crises'
+  | 'factions'
+  | 'world';
 
 export interface GameSettings {
   difficulty: DifficultyId;
@@ -1001,6 +1367,20 @@ export interface GameState {
   tradeAgreements: TradeAgreement[];
   wars: War[];
   orgs: OrgId[];
+  /** Wars between AI nations that the player is not (yet) part of. */
+  foreignWars: ForeignWar[];
+  /** Unsolicited proposals awaiting the player's answer. */
+  offers: DiplomaticOffer[];
+
+  governance: GovernanceState;
+  factions: FactionState[];
+  crises: ActiveCrisis[];
+  /** crisisId -> turn it last ended, for cooldowns. */
+  crisisCooldowns: Record<string, number>;
+  agenda: ActiveAgenda | null;
+  /** Agenda ids completed successfully, for the record. */
+  agendasCompleted: string[];
+  world: WorldState;
 
   advisors: string[];
   resources: Record<ResourceId, ResourceHolding>;
@@ -1022,6 +1402,18 @@ export interface GameState {
   log: LogEntry[];
 
   score: number;
+  /** Best-ever values, for the chronicle and the results screen. */
+  records: {
+    peakGdp: number;
+    peakScore: number;
+    peakApproval: number;
+    peakPopulation: number;
+    lowestCorruption: number;
+    warsWon: number;
+    warsLost: number;
+    crisesResolved: number;
+    eventsResolved: number;
+  };
   /**
    * Victory goals already satisfied. In eternal mode a campaign can rack up
    * several; in normal mode the first one ends the run.

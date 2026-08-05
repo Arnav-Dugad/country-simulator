@@ -3,6 +3,7 @@ import type {
   CovertOp,
   GameState,
   LogEntry,
+  MilitaryBranch,
   MilitaryState,
   OrgId,
   ResourceId,
@@ -16,13 +17,21 @@ import { BUILDING_INDEX } from '../data/buildings';
 import { POLICY_INDEX } from '../data/policies';
 import { TECH_INDEX } from '../data/technologies';
 import { ADVISOR_INDEX, MAX_ADVISORS, ORG_INDEX } from '../data/institutions';
-import { RESOURCE_INDEX, VICTORY_INDEX } from '../data/definitions';
+import { GOVERNMENT_INDEX, RESOURCE_INDEX, VICTORY_INDEX } from '../data/definitions';
 import { DECREE_INDEX, decreeCooldownRemaining } from '../data/decrees';
 import { clamp, costScale, gdpPerCapita } from '../selectors';
 import { applyEventEffects } from './events';
 import { nextRandom } from './rng';
 import { quotedPrice, tradeEligibility, type TradeTerm } from './trade';
-import { spendTreasury } from './treasury';
+import { addTreasury, spendTreasury } from './treasury';
+import {
+  beginResearch,
+  reorderQueue,
+  rushResearch,
+  setResearchPriority,
+  stopResearch,
+} from './research';
+import { assessLegislation, basePoliticalCost, nudgeFactions, spendCapital } from './politics';
 
 export interface ActionResult {
   ok: boolean;
@@ -50,52 +59,78 @@ function push(s: GameState, entry: Omit<LogEntry, 'id' | 'turn' | 'year' | 'mont
 export interface PolicyAvailability {
   enabled: boolean;
   reason: string | null;
+  /** Up-front money, in millions USD. */
   cost: number;
+  /** Political capital the legislature will charge for it. */
+  politicalCost: number;
+  /** Expected share of the house voting for it, 0–100. */
+  support: number;
+  /** One line explaining the political price. */
+  note: string;
 }
 
 export function policyAvailability(s: GameState, policyId: string): PolicyAvailability {
   const p = POLICY_INDEX[policyId];
   const scale = costScale(s.economy.gdp);
-  if (!p) return { enabled: false, reason: 'Unknown policy', cost: 0 };
+  if (!p) {
+    return { enabled: false, reason: 'Unknown policy', cost: 0, politicalCost: 0, support: 0, note: '' };
+  }
   const cost = p.upfrontCost * scale;
+  const assessment = assessLegislation(s, p);
+  const base = {
+    cost,
+    politicalCost: assessment.cost,
+    support: assessment.support,
+    note: assessment.note,
+  };
 
   if (s.activePolicies.includes(policyId)) {
-    return { enabled: false, reason: 'Already enacted', cost };
+    return { ...base, enabled: false, reason: 'Already enacted' };
   }
   const conflict = p.conflicts?.find((c) => s.activePolicies.includes(c));
   if (conflict) {
-    return { enabled: false, reason: `Conflicts with ${POLICY_INDEX[conflict]?.name ?? conflict}`, cost };
+    return { ...base, enabled: false, reason: `Conflicts with ${POLICY_INDEX[conflict]?.name ?? conflict}` };
   }
   const r = p.requires;
   if (r?.tech) {
     const missing = r.tech.filter((t) => !s.research.completed.includes(t));
     if (missing.length > 0) {
-      return { enabled: false, reason: `Requires ${missing.map((t) => TECH_INDEX[t]?.name ?? t).join(', ')}`, cost };
+      return { ...base, enabled: false, reason: `Requires ${missing.map((t) => TECH_INDEX[t]?.name ?? t).join(', ')}` };
     }
   }
   if (r?.policies) {
     const missing = r.policies.filter((t) => !s.activePolicies.includes(t));
     if (missing.length > 0) {
-      return { enabled: false, reason: `Requires ${missing.map((t) => POLICY_INDEX[t]?.name ?? t).join(', ')}`, cost };
+      return { ...base, enabled: false, reason: `Requires ${missing.map((t) => POLICY_INDEX[t]?.name ?? t).join(', ')}` };
     }
   }
   if (r?.government && !r.government.includes(s.identity.government)) {
-    return { enabled: false, reason: 'Not available under this government', cost };
+    return { ...base, enabled: false, reason: 'Not available under this government' };
   }
   if (r?.minStability !== undefined && s.stability < r.minStability) {
-    return { enabled: false, reason: `Requires ${r.minStability} stability`, cost };
+    return { ...base, enabled: false, reason: `Requires ${r.minStability} stability` };
   }
   if (r?.minGdpPerCapita !== undefined && gdpPerCapita(s) < r.minGdpPerCapita) {
     return {
+      ...base,
       enabled: false,
       reason: `Requires $${r.minGdpPerCapita.toLocaleString()} GDP per capita`,
-      cost,
+    };
+  }
+  if (assessment.blocked) {
+    return { ...base, enabled: false, reason: 'The legislature will not hear it' };
+  }
+  if (s.governance.capital < assessment.cost) {
+    return {
+      ...base,
+      enabled: false,
+      reason: `Needs ${assessment.cost} political capital (you have ${Math.floor(s.governance.capital)})`,
     };
   }
   if (s.economy.treasury < cost) {
-    return { enabled: false, reason: 'Insufficient treasury', cost };
+    return { ...base, enabled: false, reason: 'Insufficient treasury' };
   }
-  return { enabled: true, reason: null, cost };
+  return { ...base, enabled: true, reason: null };
 }
 
 export function enactPolicy(s: GameState, policyId: string): ActionResult {
@@ -103,8 +138,11 @@ export function enactPolicy(s: GameState, policyId: string): ActionResult {
   if (!availability.enabled) return fail(availability.reason ?? 'Cannot enact');
   const p = POLICY_INDEX[policyId];
 
-  s.economy.treasury -= availability.cost;
+  spendTreasury(s, availability.cost);
+  spendCapital(s, availability.politicalCost);
   s.activePolicies.push(policyId);
+  s.governance.billsPassed += 1;
+  s.governance.momentum = clamp(s.governance.momentum + 5, -100, 100);
 
   // Parties react to the ideological content of the policy.
   if (p.ideologyAppeal) {
@@ -115,6 +153,8 @@ export function enactPolicy(s: GameState, policyId: string): ActionResult {
     const own = p.ideologyAppeal[s.leader.ideology] ?? 0;
     s.approval = clamp(s.approval + own * 0.12, 0, 100);
   }
+  // Interest groups react to what the policy actually does to them.
+  nudgeFactions(s, p.factionAppeal);
 
   push(s, { text: `Policy enacted: ${p.name}.`, category: 'policy', tone: 'good', icon: p.icon });
   return ok(`${p.name} enacted.`);
@@ -126,6 +166,10 @@ export function repealPolicy(s: GameState, policyId: string): ActionResult {
   s.activePolicies = s.activePolicies.filter((id) => id !== policyId);
   // Repealing costs political capital — reversals always do.
   s.approval = clamp(s.approval - 2.5, 0, 100);
+  spendCapital(s, Math.min(s.governance.capital, p ? Math.round(basePoliticalCost(p) * 0.4) : 4));
+  s.governance.momentum = clamp(s.governance.momentum - 6, -100, 100);
+  // Whoever liked it now dislikes you, and vice versa.
+  if (p?.factionAppeal) nudgeFactions(s, p.factionAppeal, -0.7);
   push(s, { text: `Policy repealed: ${p?.name ?? policyId}.`, category: 'policy', tone: 'neutral', icon: '↩️' });
   return ok(`${p?.name ?? 'Policy'} repealed.`);
 }
@@ -134,26 +178,51 @@ export function repealPolicy(s: GameState, policyId: string): ActionResult {
 /* Research                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Starts a technology, or queues it when every laboratory is occupied.
+ *
+ * The queue is what makes parallel research worth unlocking: you plan a
+ * programme once instead of returning to the panel every time a slot opens.
+ */
 export function startResearch(s: GameState, techId: string): ActionResult {
+  const outcome = beginResearch(s, techId);
+  if (!outcome.ok) return fail(outcome.message);
   const t = TECH_INDEX[techId];
-  if (!t) return fail('Unknown technology');
-  if (s.research.completed.includes(techId)) return fail('Already researched');
-  const missing = t.requires.filter((r) => !s.research.completed.includes(r));
-  if (missing.length > 0) {
-    return fail(`Requires ${missing.map((m) => TECH_INDEX[m]?.name ?? m).join(', ')}`);
+  if (!outcome.queued && t) {
+    push(s, { text: `Research begun: ${t.name}.`, category: 'research', tone: 'neutral', icon: t.icon });
   }
-  s.research.current = techId;
-  s.research.progress = 0;
-  push(s, { text: `Research begun: ${t.name}.`, category: 'research', tone: 'neutral', icon: t.icon });
-  return ok(`Researching ${t.name}.`);
+  return ok(outcome.message);
 }
 
-export function cancelResearch(s: GameState): ActionResult {
-  if (!s.research.current) return fail('Nothing in progress');
-  const name = TECH_INDEX[s.research.current]?.name ?? 'Project';
-  s.research.current = null;
-  s.research.progress = 0;
-  return ok(`${name} cancelled.`);
+/** Cancels a specific project, or the first one when none is named. */
+export function cancelResearch(s: GameState, techId?: string): ActionResult {
+  const outcome = stopResearch(s, techId);
+  return outcome.ok ? ok(outcome.message) : fail(outcome.message);
+}
+
+/** Sets how much of the monthly output a running project receives. */
+export function setResearchWeight(s: GameState, techId: string, priority: number): ActionResult {
+  const outcome = setResearchPriority(s, techId, priority);
+  return outcome.ok ? ok(outcome.message) : fail(outcome.message);
+}
+
+/** Moves a queued technology earlier or later. */
+export function moveResearchQueue(s: GameState, techId: string, delta: number): ActionResult {
+  const outcome = reorderQueue(s, techId, delta);
+  return outcome.ok ? ok(outcome.message) : fail(outcome.message);
+}
+
+/** Spends banked points to finish a project immediately, at a premium. */
+export function rushResearchProject(s: GameState, techId: string): ActionResult {
+  const outcome = rushResearch(s, techId);
+  if (!outcome.ok) return fail(outcome.message);
+  push(s, {
+    text: outcome.message,
+    category: 'research',
+    tone: 'good',
+    icon: TECH_INDEX[techId]?.icon ?? '⚡',
+  });
+  return ok(outcome.message);
 }
 
 /* ------------------------------------------------------------------ */
@@ -213,7 +282,7 @@ export function startConstruction(s: GameState, buildingId: string): ActionResul
   if (!availability.enabled) return fail(availability.reason ?? 'Cannot build');
   const b = BUILDING_INDEX[buildingId];
 
-  s.economy.treasury -= availability.cost;
+  spendTreasury(s, availability.cost);
   // Good infrastructure and low corruption shorten delivery.
   const speed = clamp(1 - (s.infrastructure - 50) / 400 + s.corruption / 500, 0.65, 1.5);
   const turns = Math.max(1, Math.round(b.buildTime * speed));
@@ -235,7 +304,7 @@ export function cancelConstruction(s: GameState, instanceId: string): ActionResu
   const refund = b
     ? b.cost * costScale(s.economy.gdp) * (project.turnsRemaining / project.totalTurns) * 0.5
     : 0;
-  s.economy.treasury += refund;
+  addTreasury(s, refund);
   s.construction = s.construction.filter((c) => c.instanceId !== instanceId);
   push(s, { text: `Construction cancelled: ${b?.name ?? project.buildingId}.`, category: 'build', tone: 'neutral', icon: '🚫' });
   return ok('Project cancelled.');
@@ -304,7 +373,7 @@ export function issueBonds(s: GameState, amountBillions: number): ActionResult {
   if (debtRatio > 260) return fail('No market appetite at this debt level');
   // Poor credit means a haircut on what you actually raise.
   const haircut = clamp(s.economy.creditRating / 100, 0.35, 1);
-  s.economy.treasury += amount * 1000 * haircut;
+  addTreasury(s, amount * 1000 * haircut);
   s.economy.debt += amount;
   s.economy.creditRating = clamp(s.economy.creditRating - amount / Math.max(1, s.economy.gdp) * 90, 1, 100);
   push(s, {
@@ -320,7 +389,7 @@ export function repayDebt(s: GameState, amountBillions: number): ActionResult {
   const amount = clamp(amountBillions, 0, Math.min(s.economy.debt, s.economy.treasury / 1000));
   if (amount <= 0) return fail('Nothing available to repay');
   s.economy.debt -= amount;
-  s.economy.treasury -= amount * 1000;
+  spendTreasury(s, amount * 1000);
   s.economy.creditRating = clamp(s.economy.creditRating + amount / Math.max(1, s.economy.gdp) * 60, 1, 100);
   return ok(`Repaid $${amount.toFixed(1)}B of principal.`);
 }
@@ -349,9 +418,50 @@ export function dismissAdvisor(s: GameState, advisorId: string): ActionResult {
 }
 
 export function setDoctrine(s: GameState, doctrine: MilitaryState['doctrine']): ActionResult {
+  if (s.military.doctrine === doctrine) return fail('Already the standing doctrine');
   s.military.doctrine = doctrine;
+  // Re-roling the force costs readiness while everyone retrains.
   s.military.readiness = clamp(s.military.readiness - 6, 0, 100);
   return ok(`Doctrine set to ${doctrine}.`);
+}
+
+/**
+ * Shifts emphasis between the service branches.
+ *
+ * These are weights on the same budget, not new money — raising one branch
+ * genuinely takes capability out of the others.
+ */
+export function setBranchFunding(s: GameState, branch: MilitaryBranch, weight: number): ActionResult {
+  const next = clamp(Math.round(weight * 20) / 20, 0.25, 2.5);
+  s.military.branchFunding[branch] = next;
+  s.military.readiness = clamp(s.military.readiness - 1.5, 0, 100);
+  return ok(`${branch} emphasis set to ${(next * 100).toFixed(0)}%.`);
+}
+
+/**
+ * Starts or stops an indigenous nuclear weapons programme.
+ *
+ * Requires the physics package, costs a slice of the defence budget every
+ * month it runs, and the first device costs relations with everyone.
+ */
+export function setNuclearProgramme(s: GameState, active: boolean): ActionResult {
+  if (active && !s.research.completed.includes('nuclear-weapons')) {
+    return fail('Requires Nuclear Weapons research');
+  }
+  if (s.military.nuclearProgrammeActive === active) {
+    return fail(active ? 'The programme is already running' : 'The programme is already halted');
+  }
+  s.military.nuclearProgrammeActive = active;
+  if (active) {
+    push(s, {
+      text: 'A weapons programme has been authorised. It will not stay secret.',
+      category: 'military',
+      tone: 'neutral',
+      icon: '☢️',
+    });
+    return ok('Weapons programme under way.');
+  }
+  return ok('Weapons programme halted. Progress is retained.');
 }
 
 /* ------------------------------------------------------------------ */
@@ -421,7 +531,7 @@ export function sendAid(s: GameState, countryId: string, amountMillions: number)
   if (!nation) return fail('Unknown nation');
   const amount = Math.max(0, amountMillions);
   if (s.economy.treasury < amount) return fail('Insufficient treasury');
-  s.economy.treasury -= amount;
+  spendTreasury(s, amount);
   const impact = clamp(Math.sqrt(amount / Math.max(1, nation.gdp)) * 26, 0.5, 25);
   nation.relations = clamp(nation.relations + impact, -100, 100);
   nation.trust = clamp(nation.trust + impact * 0.5, 0, 100);
@@ -451,7 +561,7 @@ export function establishEmbassy(s: GameState, countryId: string): ActionResult 
   if (nation.embassy) return fail('Embassy already established');
   const cost = 400 * costScale(s.economy.gdp);
   if (s.economy.treasury < cost) return fail('Insufficient treasury');
-  s.economy.treasury -= cost;
+  spendTreasury(s, cost);
   nation.embassy = true;
   nation.relations = clamp(nation.relations + 8, -100, 100);
   return ok(`Embassy opened in ${nation.name}.`);
@@ -625,7 +735,7 @@ export function launchCovertOp(s: GameState, type: CovertOp['type'], targetId: s
   if (s.economy.treasury < cost) return fail('Insufficient treasury');
   if (s.intelligence.activeOps.length >= 4) return fail('Too many operations in progress');
 
-  s.economy.treasury -= cost;
+  spendTreasury(s, cost);
   const successChance = clamp(
     spec.baseChance + (s.intelligence.capability - 50) / 160 - (nation.stability - 50) / 260,
     0.05,
@@ -648,7 +758,7 @@ export function abortCovertOp(s: GameState, opId: string): ActionResult {
   const op = s.intelligence.activeOps.find((o) => o.id === opId);
   if (!op) return fail('Operation not found');
   s.intelligence.activeOps = s.intelligence.activeOps.filter((o) => o.id !== opId);
-  s.economy.treasury += op.cost * 0.35;
+  addTreasury(s, op.cost * 0.35);
   return ok('Operation aborted.');
 }
 
@@ -724,7 +834,7 @@ export function investInProvince(s: GameState, provinceId: string, amountMillion
   if (!province) return fail('Unknown province');
   const amount = Math.max(0, amountMillions);
   if (s.economy.treasury < amount) return fail('Insufficient treasury');
-  s.economy.treasury -= amount;
+  spendTreasury(s, amount);
   const impact = clamp(Math.sqrt(amount / Math.max(1, s.economy.gdp * 2)) * 12, 0.2, 18);
   province.development = clamp(province.development + impact, 0, 100);
   province.unrest = clamp(province.unrest - impact * 0.6, 0, 100);
@@ -735,11 +845,79 @@ export function investInProvince(s: GameState, provinceId: string, amountMillion
 export function grantAutonomy(s: GameState, provinceId: string): ActionResult {
   const province = s.provinces.find((p) => p.id === provinceId);
   if (!province) return fail('Unknown province');
+  if (province.autonomy >= 100) return fail('This province is already fully devolved');
+  const cost = 6;
+  if (s.governance.capital < cost) return fail(`Devolution costs ${cost} political capital`);
+  spendCapital(s, cost);
   province.autonomy = clamp(province.autonomy + 15, 0, 100);
   province.unrest = clamp(province.unrest - 18, 0, 100);
   province.loyalty = clamp(province.loyalty + 8, 0, 100);
+  // Devolution is the durable answer to separatism, which is the whole point
+  // of it costing capital rather than money.
+  province.separatism = clamp(province.separatism - 22, 0, 100);
   s.stability = clamp(s.stability - 1.5, 0, 100);
+  nudgeFactions(s, { regions: 8, military: -3 });
   return ok(`Autonomy extended to ${province.name}.`);
+}
+
+/**
+ * Puts a province under military administration.
+ *
+ * Buys immediate quiet at the cost of loyalty, liberties and the standing of
+ * the government — and it does nothing about why the province is angry.
+ */
+export function setMartialLaw(s: GameState, provinceId: string, active: boolean): ActionResult {
+  const province = s.provinces.find((p) => p.id === provinceId);
+  if (!province) return fail('Unknown province');
+  if (province.martialLaw === active) {
+    return fail(active ? 'Already under martial law' : 'Not under martial law');
+  }
+  if (active) {
+    const cost = 10;
+    if (s.governance.capital < cost) return fail(`Declaring martial law costs ${cost} political capital`);
+    if (s.military.strength < 15) return fail('The armed forces are not capable of it');
+    spendCapital(s, cost);
+    province.martialLaw = true;
+    province.unrest = clamp(province.unrest - 20, 0, 100);
+    s.society.civilLiberties = clamp(s.society.civilLiberties - 5, 0, 100);
+    s.society.softPower = clamp(s.society.softPower - 3, 0, 100);
+    nudgeFactions(s, { military: 6, regions: -12, intelligentsia: -10 });
+    push(s, {
+      text: `Martial law declared in ${province.name}.`,
+      category: 'politics',
+      tone: 'bad',
+      icon: '🪖',
+    });
+    return ok(`${province.name} is under military administration.`);
+  }
+  province.martialLaw = false;
+  province.loyalty = clamp(province.loyalty + 6, 0, 100);
+  nudgeFactions(s, { regions: 8, intelligentsia: 5, military: -3 });
+  push(s, {
+    text: `Martial law lifted in ${province.name}.`,
+    category: 'politics',
+    tone: 'good',
+    icon: '🕊️',
+  });
+  return ok(`Civil administration restored in ${province.name}.`);
+}
+
+/**
+ * Sets a standing monthly development budget for a province.
+ *
+ * Unlike a one-off injection this keeps paying out every month, which is what
+ * actually moves separatism — and it shows up in the budget as a real line.
+ */
+export function setProvinceInvestment(s: GameState, provinceId: string, amountMillions: number): ActionResult {
+  const province = s.provinces.find((p) => p.id === provinceId);
+  if (!province) return fail('Unknown province');
+  const cap = ((s.economy.gdp * 1000) / 12) * 0.05;
+  province.investment = clamp(Math.round(amountMillions), 0, Math.max(1, Math.round(cap)));
+  return ok(
+    province.investment > 0
+      ? `${province.name} now receives a standing development budget.`
+      : `Standing investment in ${province.name} ended.`,
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -750,62 +928,87 @@ export interface DecreeAvailability {
   enabled: boolean;
   reason: string | null;
   cost: number;
+  /** Political capital an executive action burns. */
+  politicalCost: number;
   cooldownRemaining: number;
+}
+
+/**
+ * What an executive action costs in authority.
+ *
+ * Acting by decree rather than by legislation is fast and it spends standing;
+ * the cost scales with how far the action reaches, and it is higher under a
+ * government that is supposed to consult a parliament first.
+ */
+export function decreePoliticalCost(s: GameState, decreeId: string): number {
+  const decree = DECREE_INDEX[decreeId];
+  if (!decree) return 0;
+  const stated = (decree as { politicalCost?: number }).politicalCost;
+  if (typeof stated === 'number') return stated;
+  const reach = Object.values(decree.effects).reduce(
+    (sum, v) => sum + Math.abs(typeof v === 'number' ? v : 0),
+    0,
+  );
+  const emergency = decree.category === 'emergency' ? 1.35 : 1;
+  const consultative = GOVERNMENT_INDEX[s.identity.government]?.holdsElections ? 1.25 : 1;
+  return Math.round(clamp((3 + reach * 0.22) * emergency * consultative, 2, 40));
 }
 
 export function decreeAvailability(s: GameState, decreeId: string): DecreeAvailability {
   const decree = DECREE_INDEX[decreeId];
   const scale = costScale(s.economy.gdp);
   if (!decree) {
-    return { enabled: false, reason: 'Unknown action', cost: 0, cooldownRemaining: 0 };
+    return { enabled: false, reason: 'Unknown action', cost: 0, politicalCost: 0, cooldownRemaining: 0 };
   }
 
   const cost = decree.cost * scale;
+  const politicalCost = decreePoliticalCost(s, decreeId);
   const cooldownRemaining = decreeCooldownRemaining(s, decree);
+  const base = { cost, politicalCost, cooldownRemaining };
 
   if (cooldownRemaining > 0) {
     return {
+      ...base,
       enabled: false,
       reason: `Available in ${cooldownRemaining} month${cooldownRemaining === 1 ? '' : 's'}`,
-      cost,
-      cooldownRemaining,
     };
   }
   if (s.economy.treasury < cost) {
-    return { enabled: false, reason: 'Insufficient treasury', cost, cooldownRemaining };
+    return { ...base, enabled: false, reason: 'Insufficient treasury' };
+  }
+  if (s.governance.capital < politicalCost) {
+    return {
+      ...base,
+      enabled: false,
+      reason: `Needs ${politicalCost} political capital (you have ${Math.floor(s.governance.capital)})`,
+    };
   }
 
   const r = decree.requires;
   if (r?.minStability !== undefined && s.stability < r.minStability) {
-    return { enabled: false, reason: `Requires ${r.minStability} stability`, cost, cooldownRemaining };
+    return { ...base, enabled: false, reason: `Requires ${r.minStability} stability` };
   }
   if (r?.minApproval !== undefined && s.approval < r.minApproval) {
-    return { enabled: false, reason: `Requires ${r.minApproval}% approval`, cost, cooldownRemaining };
+    return { ...base, enabled: false, reason: `Requires ${r.minApproval}% approval` };
   }
   if (r?.maxApproval !== undefined && s.approval > r.maxApproval) {
-    return {
-      enabled: false,
-      reason: `Only when approval is below ${r.maxApproval}%`,
-      cost,
-      cooldownRemaining,
-    };
+    return { ...base, enabled: false, reason: `Only when approval is below ${r.maxApproval}%` };
   }
   if (r?.government && !r.government.includes(s.identity.government)) {
-    return { enabled: false, reason: 'Not available under this government', cost, cooldownRemaining };
+    return { ...base, enabled: false, reason: 'Not available under this government' };
   }
   if (r?.tech && !r.tech.every((t) => s.research.completed.includes(t))) {
-    return { enabled: false, reason: 'Missing required technology', cost, cooldownRemaining };
+    return { ...base, enabled: false, reason: 'Missing required technology' };
   }
   if (r?.atWar !== undefined && s.wars.some((w) => !w.resolved) !== r.atWar) {
     return {
+      ...base,
       enabled: false,
       reason: r.atWar ? 'Only available during a war' : 'Not available during a war',
-      cost,
-      cooldownRemaining,
     };
   }
 
-  return { enabled: true, reason: null, cost, cooldownRemaining };
+  return { ...base, enabled: true, reason: null };
 }
 
 export function enactDecree(s: GameState, decreeId: string): ActionResult {
@@ -814,6 +1017,7 @@ export function enactDecree(s: GameState, decreeId: string): ActionResult {
 
   const decree = DECREE_INDEX[decreeId];
   spendTreasury(s, availability.cost);
+  spendCapital(s, availability.politicalCost);
   applyEventEffects(s, decree.effects);
 
   if (decree.temporary) {

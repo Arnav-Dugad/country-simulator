@@ -1,7 +1,8 @@
-import type { EnergySource, GameState, LogEntry, SectorId } from '../types';
+import type { EnergySource, GameState, LogEntry, MilitaryBranch, SectorId } from '../types';
 import { BUILDING_INDEX } from '../data/buildings';
 import { TECH_INDEX } from '../data/technologies';
 import { ACHIEVEMENTS } from '../data/achievements';
+import { RESOURCE_INDEX } from '../data/definitions';
 import { DIFFICULTY_INDEX, GOVERNMENT_INDEX, IDEOLOGY_INDEX, VICTORY_INDEX } from '../data/definitions';
 import {
   activeTradeVolume,
@@ -19,11 +20,22 @@ import { computeScore, checkVictory, scoreTitle } from './scoring';
 import { rollEvent } from './events';
 import { updateTradeAgreements } from './trade';
 import { nextRandom, noise, randRange } from './rng';
-import { addTreasury } from './treasury';
+import { addTreasury, spendTreasury } from './treasury';
+import { advanceResearchProjects, normaliseResearch } from './research';
+import { coupRisk, updateGovernance } from './politics';
+import { updateCrises } from './crises';
+import { updateAgenda } from './agenda';
+import { naturalBloc, updateDossiers, updateWorld } from './world';
+import { updateFinance } from './finance';
 
 /** Exponential approach: moves `current` a fraction of the way to `target`. */
 function drift(current: number, target: number, rate: number): number {
   return current + (target - current) * rate;
+}
+
+/** Monthly output in millions USD — used all over the engine for scaling. */
+function gdpMonthlyFor(s: GameState): number {
+  return (s.economy.gdp * 1000) / 12;
 }
 
 /**
@@ -50,7 +62,8 @@ function log(s: GameState, entry: Omit<LogEntry, 'id' | 'turn' | 'year' | 'month
 /* Sub-systems                                                         */
 /* ------------------------------------------------------------------ */
 
-function advanceResearch(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
+/** Monthly research output, before it is divided between the active slots. */
+export function researchOutput(s: GameState, mods: ReturnType<typeof totalModifiers>): number {
   const pop = s.society.population;
   const base =
     Math.pow(pop / 1e6, 0.55) * 0.9 +
@@ -62,22 +75,13 @@ function advanceResearch(s: GameState, mods: ReturnType<typeof totalModifiers>):
     (1 - s.corruption / 260) *
     s.budget.research.level;
 
-  s.research.perMonth = Math.max(0, base * quality * (1 + mods.research / 100));
-  s.research.points += s.research.perMonth;
+  return Math.max(0, base * quality * (1 + mods.research / 100));
+}
 
-  if (!s.research.current) return;
-  const tech = TECH_INDEX[s.research.current];
-  if (!tech) {
-    s.research.current = null;
-    return;
-  }
-
-  s.research.progress += s.research.perMonth;
-  if (s.research.progress >= tech.cost) {
-    s.research.points = Math.max(0, s.research.points - tech.cost);
-    s.research.completed.push(tech.id);
-    s.research.progress = 0;
-    s.research.current = null;
+function advanceResearch(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
+  s.research.perMonth = researchOutput(s, mods);
+  const { completed } = advanceResearchProjects(s, s.research.perMonth);
+  for (const tech of completed) {
     log(s, {
       text: `Research complete: ${tech.name}.`,
       category: 'research',
@@ -127,6 +131,22 @@ function energySourceFor(buildingId: string): EnergySource {
     case 'wind-farm': return 'wind';
     default: return 'other';
   }
+}
+
+/**
+ * Electricity every completed building consumes, TWh/yr.
+ *
+ * Buildings declare a negative `energy` when they are a net load. That was
+ * previously written into the data and then never read, so an arcology drawing
+ * 20 TWh cost the grid nothing. It is now part of demand.
+ */
+function buildingEnergyDemand(s: GameState): number {
+  let total = 0;
+  for (const [id, count] of Object.entries(s.buildings)) {
+    const b = BUILDING_INDEX[id];
+    if (b?.energy !== undefined && b.energy < 0) total += -b.energy * count;
+  }
+  return total;
 }
 
 /**
@@ -189,10 +209,18 @@ function updateEconomy(s: GameState, mods: ReturnType<typeof totalModifiers>): v
   const workingShare = s.society.ageStructure.working;
   const demographicTerm = (workingShare - 0.62) * 4.5;
 
-  // Cyclical deviations around the trend.
+  // Cyclical deviations around the trend. The world cycle is the largest
+  // single term a player cannot control, which is the point of having one:
+  // an export-driven economy genuinely does live or die by external demand.
+  const opennessExposure = clamp(activeTradeVolume(s) / Math.max(1, (s.economy.gdp * 1000) / 12), 0, 0.6);
+  const worldTerm = s.world.cycle * (0.6 + opennessExposure * 2.4);
+  const sanctionPenalty = s.nations.filter((n) => n.sanctioningPlayer).length * 0.12;
+
   const cyclical =
     (s.economy.confidence - 50) * 0.02 +
-    demographicTerm -
+    demographicTerm +
+    worldTerm -
+    sanctionPenalty -
     Math.max(0, s.economy.inflation - 4) * 0.28 -
     Math.max(0, s.economy.interestRate - 3) * 0.16 -
     Math.max(0, s.economy.unemployment - 6) * 0.1 -
@@ -204,6 +232,7 @@ function updateEconomy(s: GameState, mods: ReturnType<typeof totalModifiers>): v
   // `gdp` tracks real output; inflation is modelled separately so the two
   // never get conflated in the UI.
   s.economy.gdp = Math.max(0.5, s.economy.gdp * (1 + s.economy.growth / 100 / 12));
+  s.economy.realIndex = Math.max(0.01, s.economy.realIndex * (1 + s.economy.growth / 100 / 12));
 
   // --- Inflation: Phillips curve + deficit monetisation + energy costs ------
   const budget = computeBudget(s);
@@ -220,12 +249,15 @@ function updateEconomy(s: GameState, mods: ReturnType<typeof totalModifiers>): v
     noise(s) * 0.5;
   s.economy.inflation = clamp(drift(s.economy.inflation, targetInflation, 0.24), -6, 400);
 
-  // --- Central bank: a plain Taylor rule --------------------------------
-  const policyTarget = clamp(
+  // --- Central bank -------------------------------------------------------
+  // An independent bank follows a Taylor rule. A captured one does what the
+  // player told it to, which is exactly why markets charge more for the debt.
+  const taylorRate = clamp(
     1.6 + 1.5 * (s.economy.inflation - 2) + 0.5 * (s.economy.growth - 2),
     0,
     30,
   );
+  const policyTarget = s.economy.centralBankIndependent ? taylorRate : s.economy.policyRateTarget;
   s.economy.interestRate = drift(s.economy.interestRate, policyTarget, 0.18);
 
   // --- Unemployment: Okun's law around a structural rate ------------------
@@ -279,8 +311,9 @@ function updateEconomy(s: GameState, mods: ReturnType<typeof totalModifiers>): v
   // --- Treasury and debt --------------------------------------------------
   // A deficit is financed by borrowing rather than by a negative balance.
   addTreasury(s, budget.net);
-  if (s.economy.debt > 0 && s.economy.treasury > gdpMonthly * 1.5) {
-    // Surplus above 1.5 months of GDP pays the debt down.
+  if (s.economy.autoRepayDebt && s.economy.debt > 0 && s.economy.treasury > gdpMonthly * 1.5) {
+    // Surplus above 1.5 months of GDP pays the debt down. The player can turn
+    // this off in the treasury to build a war chest instead.
     const repay = Math.min(s.economy.debt, (s.economy.treasury - gdpMonthly * 1.5) / 1000);
     s.economy.debt -= repay;
     s.economy.treasury -= repay * 1000;
@@ -495,7 +528,7 @@ function updateEnergyAndEnvironment(s: GameState, mods: ReturnType<typeof totalM
   const efficiency = 1 - clamp(s.research.completed.length * 0.006, 0, 0.35);
   const targetDemand = Math.max(
     2,
-    (s.economy.gdp * 0.3 + (s.society.population / 1e6) * 1.5) * efficiency,
+    (s.economy.gdp * 0.3 + (s.society.population / 1e6) * 1.5) * efficiency + buildingEnergyDemand(s),
   );
   s.energy.demand = drift(s.energy.demand, targetDemand, 0.05);
 
@@ -574,20 +607,35 @@ function updateEnergyAndEnvironment(s: GameState, mods: ReturnType<typeof totalM
 
 function updateResources(s: GameState): void {
   const scaleFactor = s.economy.gdp * 0.06 + s.society.population / 1e6 * 0.35;
-  for (const holding of Object.values(s.resources)) {
+  // Efficiency gains reduce how much of everything an economy burns per unit
+  // of output — the same term that pulls electricity demand down.
+  const efficiency = 1 - clamp(s.research.completed.length * 0.004, 0, 0.28);
+
+  for (const [id, holding] of Object.entries(s.resources)) {
     // Extraction depletes reserves; depleted fields stop producing.
     if (holding.reserves > 0 && holding.production > 0) {
       holding.reserves = Math.max(0, holding.reserves - holding.production / (scaleFactor * 380 + 1));
       if (holding.reserves <= 0) holding.production = 0;
     }
     holding.stockpile = Math.max(0, holding.stockpile + (holding.production - holding.consumption) * 0.1);
-    holding.consumption = drift(holding.consumption, scaleFactor * 0.55, 0.05);
+
+    // Consumption is category-specific. Previously every commodity drifted to
+    // the same target, which quietly erased the distinction between how much
+    // oil and how much gold an economy actually uses.
+    const category = RESOURCE_INDEX[id as keyof typeof RESOURCE_INDEX]?.category;
+    const weight =
+      category === 'energy' ? 1.3 :
+      category === 'agricultural' ? 1.1 :
+      category === 'metal' ? 0.8 : 0.35;
+    holding.consumption = drift(holding.consumption, scaleFactor * weight * 0.55 * efficiency, 0.05);
   }
 
-  // World prices mean-revert around 1 with commodity-cycle noise.
+  // World prices mean-revert around 1, pushed by the global cycle and by how
+  // tense the world is — commodities are the first thing to price geopolitics.
+  const pressure = 1 + s.world.cycle * 0.12 + s.world.tension / 500;
   for (const key of Object.keys(s.worldPrices) as (keyof typeof s.worldPrices)[]) {
     const current = s.worldPrices[key];
-    s.worldPrices[key] = clamp(drift(current, 1, 0.02) + noise(s) * 0.03, 0.35, 3.2);
+    s.worldPrices[key] = clamp(drift(current, pressure, 0.02) + noise(s) * 0.03, 0.35, 3.2);
   }
 }
 
@@ -618,7 +666,7 @@ function updateMilitary(s: GameState, mods: ReturnType<typeof totalModifiers>): 
   s.military.strength = drift(s.military.strength, targetStrength, 0.05);
 
   const branchTarget = s.military.strength;
-  const doctrineBias: Record<GameState['military']['doctrine'], Partial<Record<'army' | 'navy' | 'airForce' | 'cyber' | 'space', number>>> = {
+  const doctrineBias: Record<GameState['military']['doctrine'], Partial<Record<MilitaryBranch, number>>> = {
     defensive: { army: 8, cyber: 4 },
     offensive: { army: 6, airForce: 8 },
     deterrence: { airForce: 6, space: 8 },
@@ -626,8 +674,56 @@ function updateMilitary(s: GameState, mods: ReturnType<typeof totalModifiers>): 
     asymmetric: { cyber: 12, army: 4 },
   };
   const bias = doctrineBias[s.military.doctrine];
-  for (const branch of ['army', 'navy', 'airForce', 'cyber', 'space'] as const) {
-    s.military[branch] = clamp(drift(s.military[branch], branchTarget + (bias[branch] ?? -3), 0.04), 0, 100);
+  const branches: MilitaryBranch[] = ['army', 'navy', 'airForce', 'cyber', 'space'];
+  // Branch funding is a split of the same money, not extra money: the weights
+  // are normalised so favouring one arm genuinely starves the others.
+  const fundingTotal = branches.reduce((sum, b) => sum + (s.military.branchFunding[b] ?? 1), 0) || branches.length;
+  for (const branch of branches) {
+    const share = ((s.military.branchFunding[branch] ?? 1) / fundingTotal) * branches.length;
+    const emphasis = (share - 1) * 18;
+    s.military[branch] = clamp(
+      drift(s.military[branch], clamp(branchTarget + (bias[branch] ?? -3) + emphasis, 0, 100), 0.04),
+      0,
+      100,
+    );
+  }
+
+  // --- Nuclear weapons programme -------------------------------------------
+  // A slow, expensive, diplomatically ruinous project that cannot be rushed.
+  if (s.military.nuclearProgrammeActive) {
+    const hasTech = s.research.completed.includes('nuclear-weapons');
+    if (!hasTech) {
+      s.military.nuclearProgrammeActive = false;
+      log(s, {
+        text: 'The weapons programme has been suspended: the underlying physics package is not ready.',
+        category: 'military',
+        tone: 'bad',
+        icon: '☢️',
+      });
+    } else {
+      const cost = baselineDeptSpend(s).military * 0.55;
+      spendTreasury(s, cost);
+      const rate = 0.9 + s.economy.gdp / 4000 + s.research.completed.length * 0.02;
+      s.military.nuclearProgramme = clamp(s.military.nuclearProgramme + rate, 0, 100);
+      s.society.softPower = clamp(s.society.softPower - 0.06, 0, 100);
+      if (s.military.nuclearProgramme >= 100) {
+        s.military.nuclearWarheads += 1;
+        s.military.nuclearProgramme = 0;
+        for (const n of s.nations) {
+          n.relations = clamp(n.relations - (s.military.nuclearWarheads === 1 ? 12 : 1.5), -100, 100);
+          n.threatPerception = clamp(n.threatPerception + 6, 0, 100);
+        }
+        log(s, {
+          text:
+            s.military.nuclearWarheads === 1
+              ? 'The first device has been assembled. The world has been informed by its own sensors.'
+              : `Warhead ${s.military.nuclearWarheads} has entered the stockpile.`,
+          category: 'military',
+          tone: 'neutral',
+          icon: '☢️',
+        });
+      }
+    }
   }
 
   s.military.manpower = Math.round(
@@ -716,6 +812,11 @@ function updateMilitary(s: GameState, mods: ReturnType<typeof totalModifiers>): 
 function updateDiplomacy(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
   const openGov = ['democracy', 'republic', 'federal-republic', 'constitutional-monarchy', 'direct-democracy'];
   const playerOpen = openGov.includes(s.identity.government);
+  const playerBloc = naturalBloc({
+    government: s.identity.government,
+    region: s.identity.region,
+    gdp: s.economy.gdp,
+  });
 
   for (const n of s.nations) {
     if (n.atWarWithPlayer) {
@@ -731,25 +832,27 @@ function updateDiplomacy(s: GameState, mods: ReturnType<typeof totalModifiers>):
       n.personality === 'isolationist' ? -3 :
       2;
 
+    // Bloc alignment matters as much as government type once blocs exist.
+    const blocAffinity = n.bloc === playerBloc ? 10 : n.bloc === null ? 0 : -5;
+
     const target = clamp(
       govAffinity +
+        blocAffinity +
         personalityBias +
         mods.diplomacy * 0.35 +
         s.society.softPower * 0.22 -
-        (n.sanctioned ? 45 : 0) +
+        (n.sanctioned ? 45 : 0) -
+        (n.sanctioningPlayer ? 20 : 0) -
+        n.threatPerception * 0.14 +
         (s.treaties.some((t) => t.countryId === n.id) ? 22 : 0) +
         (s.orgs.length > 0 ? s.orgs.length * 2 : 0) -
-        s.wars.filter((w) => !w.resolved).length * 5,
+        s.wars.filter((w) => !w.resolved).length * 5 -
+        s.world.tension * 0.08,
       -100,
       100,
     );
     n.relations = clamp(drift(n.relations, target, 0.03) + noise(s) * 0.25, -100, 100);
     n.trust = clamp(drift(n.trust, 50 + n.relations * 0.35, 0.02), 0, 100);
-
-    // Foreign economies grow on their own so the world does not stand still.
-    const foreignGrowth = clamp(4.2 - Math.log10(Math.max(500, (n.gdp * 1e9) / n.population)) * 0.75, 0.2, 6);
-    n.gdp *= 1 + foreignGrowth / 100 / 12;
-    n.population = Math.round(n.population * (1 + (n.gdp > 800 ? 0.0004 : 0.0011) / 12));
   }
 
   // Trade is a fixed share of the player's own economy, split between partners
@@ -758,9 +861,10 @@ function updateDiplomacy(s: GameState, mods: ReturnType<typeof totalModifiers>):
   const openness = clamp(0.2 * (1 + mods.tradeIncome / 220) * (1 - s.taxes.tariff / 200), 0.03, 0.6);
   const gdpMonthly = (s.economy.gdp * 1000) / 12;
   const weights = s.nations.map((n) => {
-    if (n.atWarWithPlayer || n.sanctioned) return 0;
+    if (n.atWarWithPlayer || n.sanctioned || n.sanctioningPlayer) return 0;
     const proximity = n.region === s.identity.region ? 1.8 : 1;
-    return Math.max(0, n.gdp) * proximity * (0.35 + (n.relations + 100) / 260);
+    const sameBloc = n.bloc === playerBloc ? 1.25 : 1;
+    return Math.max(0, n.gdp) * proximity * sameBloc * (0.35 + (n.relations + 100) / 260);
   });
   const weightTotal = weights.reduce((a, b) => a + b, 0);
   s.nations.forEach((n, i) => {
@@ -898,25 +1002,62 @@ function updatePolitics(s: GameState, mods: ReturnType<typeof totalModifiers>): 
   s.infrastructure = drift(s.infrastructure, infraTarget, 0.05);
 
   // --- Provinces ------------------------------------------------------------
+  const provinceInvestment = s.provinces.reduce((sum, p) => sum + Math.max(0, p.investment), 0);
+  if (provinceInvestment > 0) spendTreasury(s, provinceInvestment);
+
   for (const p of s.provinces) {
+    // Martial law suppresses unrest hard, and costs liberties and legitimacy.
+    const suppression = p.martialLaw ? 24 : 0;
     const unrestTarget = clamp(
       36 -
         s.stability * 0.34 +
         (s.economy.unemployment - 6) * 1.6 +
         (100 - p.loyalty) * 0.2 +
         p.autonomy * 0.1 -
-        s.society.happiness * 0.18,
+        s.society.happiness * 0.18 -
+        suppression,
       0,
       100,
     );
     p.unrest = clamp(drift(p.unrest, unrestTarget, 0.06), 0, 100);
-    p.loyalty = clamp(drift(p.loyalty, clamp(s.stability * 0.6 + s.approval * 0.3 - p.autonomy * 0.15, 0, 100), 0.04), 0, 100);
-    p.development = clamp(
-      drift(p.development, clamp(s.infrastructure * 0.6 + s.society.education * 0.3 + 10, 0, 100), 0.02),
+
+    // Occupation buys quiet and spends consent — loyalty falls under it.
+    const loyaltyTarget = clamp(
+      s.stability * 0.6 + s.approval * 0.3 - p.autonomy * 0.15 - (p.martialLaw ? 22 : 0),
       0,
       100,
     );
+    p.loyalty = clamp(drift(p.loyalty, loyaltyTarget, 0.04), 0, 100);
+
+    // Standing investment raises the local ceiling on development.
+    const investmentBoost = clamp((p.investment / Math.max(1, gdpMonthlyFor(s) * 0.02)) * 12, 0, 30);
+    p.development = clamp(
+      drift(
+        p.development,
+        clamp(s.infrastructure * 0.6 + s.society.education * 0.3 + 10 + investmentBoost, 0, 100),
+        0.02,
+      ),
+      0,
+      100,
+    );
+
+    // Separatism is a slow accumulator, not a monthly reading. Years of
+    // neglect build it; investment, loyalty and devolution bleed it away.
+    const pressure =
+      (p.unrest - 45) * 0.05 +
+      (p.autonomy - 40) * 0.02 +
+      (55 - p.loyalty) * 0.045 -
+      (p.martialLaw ? -0.25 : 0.15) -
+      investmentBoost * 0.02;
+    p.separatism = clamp(p.separatism + pressure, 0, 100);
+
     p.population *= 1 + (s.society.birthRate - s.society.deathRate) / 1000 / 12;
+  }
+
+  const occupied = s.provinces.filter((p) => p.martialLaw).length;
+  if (occupied > 0) {
+    s.society.civilLiberties = clamp(s.society.civilLiberties - occupied * 0.25, 0, 100);
+    spendTreasury(s, baselineDeptSpend(s).police * 0.35 * occupied);
   }
 
   // --- Parties ---------------------------------------------------------------
@@ -942,9 +1083,13 @@ function updatePolitics(s: GameState, mods: ReturnType<typeof totalModifiers>): 
     );
     supportSum += party.support;
   }
-  for (const party of s.parties) {
-    party.support = (party.support / supportSum) * 100;
-    party.seats = Math.round((party.support / 100) * totalSeats);
+  // Guard: with no parties, or every party at zero, normalising would divide
+  // by zero and put NaN through the whole political block.
+  if (supportSum > 0) {
+    for (const party of s.parties) {
+      party.support = (party.support / supportSum) * 100;
+      party.seats = Math.round((party.support / 100) * totalSeats);
+    }
   }
 
   // --- Elections --------------------------------------------------------------
@@ -962,17 +1107,23 @@ function runElection(s: GameState): void {
     .filter((p) => p.id !== playerParty?.id)
     .reduce((best, p) => (p.support > (best?.support ?? -1) ? p : best), null as typeof s.parties[number] | null);
 
-  // Incumbency, turnout noise and a small advantage for a stable state.
-  const swing = noise(s) * 4 + (s.stability - 50) * 0.04;
+  // Incumbency, turnout noise and a small advantage for a stable state. A
+  // government mid-way through a plan that is visibly working gets credit for
+  // it; one that has just abandoned a plan does not.
+  const record = s.governance.momentum * 0.06 + (s.governance.mandate - 50) * 0.05;
+  const swing = noise(s) * 4 + (s.stability - 50) * 0.04 + record;
   const playerResult = playerShare + swing;
   const rivalResult = topRival?.support ?? 0;
 
   if (playerResult >= rivalResult) {
     s.termsServed += 1;
     s.leader.legacy += 25;
-    s.leader.age += Math.round(gov.termMonths / 12);
+    // The leader ages one year per year in `tick`; adding a term's worth here
+    // as well made every incumbent age at double speed.
     s.monthsToElection = gov.termMonths;
     s.approval = clamp(s.approval + 6, 0, 100);
+    s.governance.mandate = clamp(s.governance.mandate + 14, 0, 100);
+    s.governance.momentum = clamp(s.governance.momentum + 30, -100, 100);
     log(s, {
       text: `Election won with ${playerResult.toFixed(1)}% of the vote. Term ${s.termsServed} begins.`,
       category: 'election',
@@ -986,7 +1137,8 @@ function runElection(s: GameState): void {
     s.monthsToElection = Math.max(12, Math.round(gov.termMonths * 0.6));
     s.approval = clamp(s.approval - 12, 0, 100);
     s.stability = clamp(s.stability - 10, 0, 100);
-    s.leader.age += Math.round(gov.termMonths / 24);
+    s.governance.mandate = clamp(s.governance.mandate - 22, 0, 100);
+    s.governance.momentum = clamp(s.governance.momentum - 35, -100, 100);
     for (const party of s.parties) {
       if (party.id !== playerParty?.id) party.relation = clamp(party.relation - 18, -100, 100);
     }
@@ -1087,9 +1239,13 @@ function checkGameOver(s: GameState): void {
     };
     return;
   }
-  // Removal requires both a collapsed mandate and a state too weak to protect
-  // the incumbent — one bad poll is survivable, the combination is not.
-  if (s.approval <= 4 && s.stability < 30 && s.turn > 24) {
+  // Removal requires a collapsed mandate, a state too weak to protect the
+  // incumbent, and no residual legitimacy to fall back on. Before the
+  // governance model existed "mandate" was inferred from approval alone, which
+  // meant one very bad month at the bottom of a global downturn could remove a
+  // government that every institution still recognised. It is now the actual
+  // mandate figure, so the three conditions are genuinely independent.
+  if (s.approval <= 4 && s.stability < 30 && s.governance.mandate < 35 && s.turn > 24) {
     s.gameOver = {
       reason: 'With no public mandate and no institutional support left, you were removed from office.',
       victory: false,
@@ -1148,24 +1304,38 @@ export function tick(s: GameState): GameState {
     s.leader.age += 1;
   }
 
+  normaliseResearch(s);
+
   const mods = totalModifiers(s);
+  const logger = (entry: Omit<LogEntry, 'id' | 'turn' | 'year' | 'month'>) => log(s, entry);
+
+  // The world moves first, so the domestic economy reacts to the cycle and to
+  // any war that broke out this month rather than to last month's world.
+  updateWorld(s, logger);
 
   advanceResearch(s, mods);
   advanceConstruction(s);
   updateEconomy(s, mods);
+  updateFinance(s);
   updateSociety(s, mods);
   updateEnergyAndEnvironment(s, mods);
   updateResources(s);
   updateMilitary(s, mods);
+  updateDossiers(s);
   updateDiplomacy(s, mods);
   updateWars(s);
+  updateGovernance(s);
   updatePolitics(s, mods);
+  updateCrises(s, logger);
+  updateAgenda(s, logger);
   updateModifiers(s);
+  checkCoup(s, logger);
 
   rollEvent(s);
 
   s.score = computeScore(s).total;
   checkAchievements(s);
+  updateRecords(s);
 
   s.history.push({
     turn: s.turn,
@@ -1184,10 +1354,66 @@ export function tick(s: GameState): GameState {
     emissions: s.environment.emissions,
     militaryStrength: s.military.strength,
     score: s.score,
+    politicalCapital: s.governance.capital,
+    research: s.research.perMonth,
   });
   if (s.history.length > 1400) s.history.splice(0, s.history.length - 1400);
 
   checkGameOver(s);
   s.updatedAt = Date.now();
   return s;
+}
+
+/** Keeps the campaign's best-ever figures for the chronicle. */
+function updateRecords(s: GameState): void {
+  const r = s.records;
+  r.peakGdp = Math.max(r.peakGdp, s.economy.gdp);
+  r.peakScore = Math.max(r.peakScore, s.score);
+  r.peakApproval = Math.max(r.peakApproval, s.approval);
+  r.peakPopulation = Math.max(r.peakPopulation, s.society.population);
+  r.lowestCorruption = Math.min(r.lowestCorruption, s.corruption);
+  r.warsWon = s.wars.filter((w) => w.resolved === 'victory').length;
+  r.warsLost = s.wars.filter((w) => w.resolved === 'defeat').length;
+}
+
+/**
+ * A military that has been alienated, is influential, and faces a government
+ * with no mandate left will eventually act. Disabled in eternal mode along
+ * with every other terminal condition.
+ */
+function checkCoup(s: GameState, logger: (e: Omit<LogEntry, 'id' | 'turn' | 'year' | 'month'>) => void): void {
+  if (s.gameOver || s.turn < 24) return;
+  const risk = coupRisk(s);
+  if (risk <= 0 || nextRandom(s) > risk) return;
+
+  if (s.settings.neverEndGame) {
+    // Eternal mode: the attempt happens and fails, at a real cost.
+    s.stability = clamp(s.stability - 18, 0, 100);
+    s.approval = clamp(s.approval - 8, 0, 100);
+    s.military.morale = clamp(s.military.morale - 20, 0, 100);
+    s.governance.mandate = clamp(s.governance.mandate - 15, 0, 100);
+    const army = s.factions.find((f) => f.id === 'military');
+    if (army) army.satisfaction = clamp(army.satisfaction + 12, 0, 100);
+    logger({
+      text: 'Elements of the officer corps attempted to seize power overnight. The attempt failed, narrowly.',
+      category: 'politics',
+      tone: 'critical',
+      icon: '🎖️',
+    });
+    return;
+  }
+
+  s.gameOver = {
+    reason:
+      'The general staff moved against you before dawn. The armed forces had stopped considering the government theirs to obey.',
+    victory: false,
+    turn: s.turn,
+    title: 'Deposed',
+  };
+  logger({
+    text: 'A military coup has removed the government.',
+    category: 'politics',
+    tone: 'critical',
+    icon: '🎖️',
+  });
 }

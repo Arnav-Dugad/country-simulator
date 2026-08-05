@@ -45,12 +45,21 @@ export function computeScore(s: GameState): ScoreBreakdown {
     1700,
   );
 
+  // Governance now includes how legitimate the government actually is and how
+  // well it keeps its coalition together — a state held down by force scores
+  // materially worse than one governed by consent.
+  const factionAverage = s.factions.length
+    ? s.factions.reduce((sum, f) => sum + f.satisfaction, 0) / s.factions.length
+    : 50;
   const governance = clamp(
-    s.stability * 5.6 +
-      s.approval * 3.6 +
-      Math.max(0, 100 - s.corruption) * 5.2 +
-      s.society.civilLiberties * 3.4 +
-      Math.max(0, 100 - s.society.crime) * 2.4,
+    s.stability * 4.4 +
+      s.approval * 3.0 +
+      Math.max(0, 100 - s.corruption) * 4.4 +
+      s.society.civilLiberties * 2.8 +
+      Math.max(0, 100 - s.society.crime) * 2.0 +
+      s.governance.mandate * 2.6 +
+      factionAverage * 2.2 -
+      s.provinces.filter((p) => p.martialLaw).length * 40,
     0,
     1700,
   );
@@ -90,7 +99,16 @@ export function computeScore(s: GameState): ScoreBreakdown {
     0,
   );
 
-  const longevity = clamp(s.turn * 1.5 + s.termsServed * 40, 0, 1000);
+  // Longevity credits what the government actually delivered, not only how
+  // long it lasted: a plan carried through and a crisis contained both count.
+  const longevity = clamp(
+    s.turn * 1.4 +
+      s.termsServed * 34 +
+      s.agendasCompleted.length * 55 +
+      s.records.crisesResolved * 22,
+    0,
+    1000,
+  );
 
   const raw =
     prosperity + wellbeing + governance + power + sustainability + knowledge + achievements + longevity;

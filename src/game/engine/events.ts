@@ -224,6 +224,13 @@ export function resolveEvent(s: GameState, choiceId: string): ResolutionOutcome 
   if (def.chains) s.chainedEvents.push(...def.chains);
 
   s.eventQueue = s.eventQueue.slice(1);
+  s.records.eventsResolved += 1;
+  // Handling a crisis well builds standing; fumbling one costs it.
+  s.governance.momentum = clamp(
+    s.governance.momentum + (failed ? -6 : def.severity === 'critical' ? 8 : 3),
+    -100,
+    100,
+  );
 
   const headline = failed
     ? `${def.title}: "${choice.label}" backfired.`

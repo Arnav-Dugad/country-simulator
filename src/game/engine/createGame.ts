@@ -4,6 +4,8 @@ import type {
   ForeignNation,
   GameState,
   IdeologyId,
+  MilitaryBranch,
+  NationAgenda,
   PoliticalParty,
   Province,
   ResourceHolding,
@@ -25,6 +27,9 @@ import {
 import { TECHNOLOGIES } from '../data/technologies';
 import { baselineDeptSpend, clamp, computeBudget } from '../selectors';
 import { BUDGET_MAX } from './actions';
+import { initialFactions } from './politics';
+import { naturalBloc } from './world';
+import { normaliseResearch } from './research';
 import { nextRandom, pick, randRange } from './rng';
 
 /**
@@ -34,8 +39,11 @@ import { nextRandom, pick, randRange } from './rng';
  * 2 — adds `settings.neverEndGame` and `victoriesAchieved`.
  * 3 — adds `decreeCooldowns` for executive actions.
  * 4 — adds `tradeAgreements` and per-nation resource endowments.
+ * 5 — parallel research, political capital, interest groups, crises, national
+ *     agendas, the living world (AI wars, offers, blocs, cycle) and the
+ *     sovereign wealth fund.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /* ------------------------------------------------------------------ */
 /* Province generation                                                 */
@@ -70,6 +78,9 @@ function generateProvinces(
     specialty: 'services',
     autonomy: 10,
     loyalty: clamp((profile?.stability ?? 60) + 12, 25, 98),
+    martialLaw: false,
+    separatism: 0,
+    investment: 0,
   });
 
   const used = new Set<string>();
@@ -94,6 +105,9 @@ function generateProvinces(
       specialty,
       autonomy: clamp(randRange(seedState, 8, 45), 5, 70),
       loyalty: clamp((profile?.stability ?? 60) - randRange(seedState, 0, 22), 15, 98),
+      martialLaw: false,
+      separatism: clamp(randRange(seedState, 0, 18), 0, 40),
+      investment: 0,
     });
   }
 
@@ -214,9 +228,23 @@ function generateNations(
       personality: PERSONALITIES[Math.floor(nextRandom(seedState) * PERSONALITIES.length)],
       trust: clamp(50 + randRange(seedState, -15, 15), 10, 90),
       resources: c.resources,
+      agenda: NATION_AGENDAS[Math.floor(nextRandom(seedState) * NATION_AGENDAS.length)],
+      warsWith: [],
+      bloc: naturalBloc(c),
+      threatPerception: clamp(randRange(seedState, 5, 30), 0, 100),
+      sanctioningPlayer: false,
     };
   });
 }
+
+const NATION_AGENDAS: NationAgenda[] = [
+  'expansion',
+  'trade',
+  'isolation',
+  'rearmament',
+  'influence',
+  'development',
+];
 
 function governmentFamily(gov: string): 'open' | 'closed' {
   return ['democracy', 'republic', 'federal-republic', 'constitutional-monarchy', 'direct-democracy'].includes(gov)
@@ -410,6 +438,15 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
       inequality: clamp(38 + baseCorruption * 0.16 - tilt('welfare') * 7, 15, 78),
       productivity: clamp(58 + baseTech * 0.45, 30, 140),
       exchangeRate: currency.perUsd,
+      sovereignFund: 0,
+      fundReturn: 0,
+      // Independence is the inherited institutional arrangement almost
+      // everywhere; taking control is a decision the player makes later.
+      centralBankIndependent: true,
+      policyRateTarget: clamp(2.5 + (baseCorruption - 40) / 18, 0.1, 22),
+      bondYield: clamp(3.5 + debtRatio * 2 + baseCorruption / 22, 0.5, 30),
+      autoRepayDebt: true,
+      realIndex: 100,
     },
 
     society: {
@@ -465,6 +502,9 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
       readiness: clamp(52 + baseMilitary * 0.3, 12, 96),
       doctrine: config.doctrine,
       veterancy: clamp(28 + baseMilitary * 0.24, 5, 90),
+      branchFunding: DEFAULT_BRANCH_FUNDING(),
+      nuclearProgramme: 0,
+      nuclearProgrammeActive: false,
     },
 
     research: {
@@ -473,6 +513,9 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
       completed: [],
       current: null,
       progress: 0,
+      active: [],
+      queue: [],
+      bonusSlots: 0,
     },
 
     intelligence: {
@@ -480,6 +523,7 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
       activeOps: [],
       counterIntel: clamp(22 + baseTech * 0.3, 5, 88),
       networkCountries: [],
+      dossiers: {},
     },
 
     approval: clamp(56 + tilt('welfare') * 4, 20, 88),
@@ -524,6 +568,32 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
     tradeAgreements: [],
     wars: [],
     orgs: [],
+    foreignWars: [],
+    offers: [],
+
+    governance: {
+      capital: 20,
+      capitalPerMonth: 0,
+      capitalCap: 100,
+      mandate: clamp(50 + baseStability * 0.25 - baseCorruption * 0.12, 10, 92),
+      legislativeSupport: government.holdsElections ? 52 : 68,
+      momentum: 0,
+      billsPassed: 0,
+      billsBlocked: 0,
+    },
+    factions: [],
+    crises: [],
+    crisisCooldowns: {},
+    agenda: null,
+    agendasCompleted: [],
+    world: {
+      tension: clamp(24 + (era.id === 'cold-war' ? 26 : era.id === 'near-future' ? 12 : 0), 0, 100),
+      cycle: 0.1,
+      cyclePhase: 'expansion',
+      globalGrowth: 3,
+      globalGdp: 0,
+      monthsToPhaseShift: Math.round(randRange(seedState, 24, 54)),
+    },
 
     advisors: [],
     resources: deriveResources(profile, gdp, population),
@@ -551,6 +621,17 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
     ],
 
     score: 0,
+    records: {
+      peakGdp: gdp,
+      peakScore: 0,
+      peakApproval: 0,
+      peakPopulation: population,
+      lowestCorruption: baseCorruption,
+      warsWon: 0,
+      warsLost: 0,
+      crisesResolved: 0,
+      eventsResolved: 0,
+    },
     victoriesAchieved: [],
     gameOver: null,
     rngSeed: seedState.rngSeed,
@@ -579,11 +660,22 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
   // Start the research queue on the cheapest available project so a new
   // campaign is already making progress on turn one.
   const firstTech = TECHNOLOGIES.filter((t) => t.requires.length === 0).sort((a, b) => a.cost - b.cost)[0];
-  if (firstTech) state.research.current = firstTech.id;
+  if (firstTech) {
+    state.research.active = [{ techId: firstTech.id, progress: 0, priority: 1 }];
+  }
+  normaliseResearch(state);
+
+  state.factions = initialFactions(state);
+  state.world.globalGdp = state.nations.reduce((sum, n) => sum + n.gdp, state.economy.gdp);
 
   balanceInheritedBudget(state);
 
   return state;
+}
+
+/** Every branch funded evenly until the player decides otherwise. */
+function DEFAULT_BRANCH_FUNDING(): Record<MilitaryBranch, number> {
+  return { army: 1, navy: 1, airForce: 1, cyber: 1, space: 1 };
 }
 
 /**

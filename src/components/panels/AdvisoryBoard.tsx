@@ -3,11 +3,12 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, ArrowRight, Lightbulb, ShieldAlert, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
 import type { GameState } from '../../game/types';
-import type { Recommendation, RecommendationAction } from '../../game/engine/advisory';
+import type { Recommendation } from '../../game/engine/advisory';
 import { buildRecommendations } from '../../game/engine/advisory';
-import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
+import { useRecommendationRunner } from '../game/NextMoveStrip';
 import { Badge, Button, Card, EmptyState } from '../ui/primitives';
+import { NAV_INDEX } from '../layout/GameShell';
 
 const SEVERITY = {
   critical: {
@@ -95,21 +96,11 @@ export function AdvisoryBoard({
 
 function RecommendationCard({ rec, game }: { rec: Recommendation; game: GameState }) {
   const setPanel = useUiStore((s) => s.setPanel);
-  const store = useGameStore();
+  // Shared with the next-move strip, so there is exactly one implementation of
+  // "do what the cabinet suggested" and the two surfaces cannot drift.
+  const runAction = useRecommendationRunner();
   const severity = SEVERITY[rec.severity];
   const Icon = severity.icon;
-
-  const runAction = (action: RecommendationAction) => {
-    switch (action.kind) {
-      case 'policy': store.enactPolicy(action.id); break;
-      case 'decree': store.enactDecree(action.id); break;
-      case 'research': store.startResearch(action.id); break;
-      case 'build': store.build(action.id); break;
-      case 'org': store.joinOrg(action.id as Parameters<typeof store.joinOrg>[0]); break;
-      case 'budget': store.setBudget(action.dept, action.level); break;
-      case 'tax': store.setTax(action.key, action.value); break;
-    }
-  };
 
   return (
     <div className={clsx('rounded-xl border p-3.5', severity.border, severity.wash)}>
@@ -135,7 +126,7 @@ function RecommendationCard({ rec, game }: { rec: Recommendation; game: GameStat
                 variant="primary"
                 icon={<Sparkles size={12} />}
                 disabled={game.gameOver !== null}
-                onClick={() => runAction(rec.action!)}
+                onClick={() => runAction(rec)}
               >
                 {rec.action.label}
               </Button>
@@ -146,7 +137,7 @@ function RecommendationCard({ rec, game }: { rec: Recommendation; game: GameStat
               icon={<ArrowRight size={12} />}
               onClick={() => setPanel(rec.panel)}
             >
-              Open {rec.panel}
+              Open {NAV_INDEX[rec.panel]?.label ?? rec.panel}
             </Button>
           </div>
         </div>

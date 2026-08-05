@@ -6,6 +6,53 @@ import type { Policy, PolicyCategory } from '../types';
  * involve a real trade-off, never a free win.
  */
 export const POLICIES: Policy[] = [
+  /* ------------------------------ Research ------------------------------- */
+  {
+    id: 'open-science-mandate',
+    name: 'Open Science Mandate',
+    category: 'technology',
+    icon: '🔓',
+    description:
+      'Every publicly funded result published open-access with its data, and every national instrument bookable by any accredited team. Duplication collapses; a further programme becomes affordable.',
+    upfrontCost: 3200,
+    monthlyCost: 420,
+    modifiers: { research: 14, education: 4, softPower: 5 },
+    requires: { tech: ['national-lab-network'] },
+    politicalCost: 14,
+    ideologyAppeal: { progressive: 12, liberal: 8, green: 6, traditionalist: -6 },
+    factionAppeal: { intelligentsia: 16, business: -6 },
+  },
+  {
+    id: 'strategic-industries-act',
+    name: 'Strategic Industries Act',
+    category: 'economy',
+    icon: '🏭',
+    description:
+      'Name the sectors the state considers essential, then underwrite them: capital allowances, guaranteed offtake and a screen on foreign acquisition.',
+    upfrontCost: 18000,
+    monthlyCost: 1400,
+    modifiers: { gdpGrowth: 0.55, tradeIncome: 6, research: 6, spendingEfficiency: -4 },
+    requires: { tech: ['industrial-policy'] },
+    politicalCost: 24,
+    ideologyAppeal: { nationalist: 14, conservative: 6, socialist: 8, libertarian: -16 },
+    factionAppeal: { business: 10, labour: 8, intelligentsia: -4 },
+  },
+  {
+    id: 'civil-service-reform',
+    name: 'Civil Service Reform',
+    category: 'governance',
+    icon: '🗂️',
+    description:
+      'Recruit by open examination, promote on published criteria, and make political appointment the exception rather than the mechanism.',
+    upfrontCost: 6400,
+    monthlyCost: 260,
+    modifiers: { corruption: -11, spendingEfficiency: 9, taxEfficiency: 6, approval: -2 },
+    requires: { tech: ['public-administration'] },
+    politicalCost: 30,
+    ideologyAppeal: { progressive: 10, centrist: 8, liberal: 8, nationalist: -8 },
+    factionAppeal: { intelligentsia: 14, business: 6, regions: -6, clergy: -4 },
+  },
+
   /* ------------------------------- Economy -------------------------------- */
   {
     id: 'stimulus-package',

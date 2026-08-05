@@ -1,4 +1,4 @@
-import type { EnergySource, GameState, Modifiers, ResourceId, SectorId } from './types';
+import type { EnergySource, FactionId, GameState, Modifiers, ResourceId, SectorId } from './types';
 import { BUILDING_INDEX } from './data/buildings';
 import { POLICY_INDEX } from './data/policies';
 import { TECH_INDEX } from './data/technologies';
@@ -6,48 +6,32 @@ import {
   DIFFICULTY_INDEX, ERA_INDEX, GOVERNMENT_INDEX, IDEOLOGY_INDEX, TRAIT_INDEX,
 } from './data/definitions';
 import { ADVISOR_INDEX, ORG_INDEX } from './data/institutions';
+import { FACTION_INDEX } from './data/factions';
+import { CRISIS_INDEX } from './data/crises';
+import { AGENDA_INDEX } from './data/agendas';
+import {
+  averageRelations,
+  clamp,
+  debtToGdp,
+  energyBalance,
+  gdpPerCapita,
+  renewableShare,
+  totalEnergyProduction,
+} from './math';
+
+export {
+  averageRelations,
+  clamp,
+  debtToGdp,
+  energyBalance,
+  gdpPerCapita,
+  renewableShare,
+  totalEnergyProduction,
+};
 
 /* ------------------------------------------------------------------ */
 /* Derived scalars                                                     */
 /* ------------------------------------------------------------------ */
-
-/** Nominal GDP per capita in USD. */
-export function gdpPerCapita(s: GameState): number {
-  if (s.society.population <= 0) return 0;
-  return (s.economy.gdp * 1e9) / s.society.population;
-}
-
-/** Public debt as a percentage of GDP. */
-export function debtToGdp(s: GameState): number {
-  if (s.economy.gdp <= 0) return 0;
-  return (s.economy.debt / s.economy.gdp) * 100;
-}
-
-/** Mean relations across every simulated nation, -100..100. */
-export function averageRelations(s: GameState): number {
-  if (s.nations.length === 0) return 0;
-  return s.nations.reduce((sum, n) => sum + n.relations, 0) / s.nations.length;
-}
-
-/** Total electricity produced, TWh/yr. */
-export function totalEnergyProduction(s: GameState): number {
-  return (Object.values(s.energy.production) as number[]).reduce((a, b) => a + b, 0);
-}
-
-/** Ratio of supply to demand. 1 = balanced, <1 = shortfall. */
-export function energyBalance(s: GameState): number {
-  const demand = Math.max(1, s.energy.demand);
-  return totalEnergyProduction(s) / demand;
-}
-
-/** Share of electricity from zero-carbon sources, 0–100. */
-export function renewableShare(s: GameState): number {
-  const total = totalEnergyProduction(s);
-  if (total <= 0) return 0;
-  const clean: EnergySource[] = ['nuclear', 'hydro', 'solar', 'wind'];
-  const cleanTotal = clean.reduce((sum, k) => sum + s.energy.production[k], 0);
-  return (cleanTotal / total) * 100;
-}
 
 /** Human Development Index proxy, 0–100. */
 export function hdi(s: GameState): number {
@@ -57,8 +41,58 @@ export function hdi(s: GameState): number {
   return clamp((income + lifeExp + edu) / 3, 0, 100);
 }
 
-export function clamp(v: number, min: number, max: number): number {
-  return v < min ? min : v > max ? max : v;
+/* ------------------------------------------------------------------ */
+/* Live system modifiers                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The aggregate modifier bundle produced by interest-group moods.
+ *
+ * A faction at 50 satisfaction is neutral. Above that it contributes its
+ * `pleasedModifiers`, below it its `angeredModifiers`, in both cases scaled by
+ * how much influence it actually holds — so annoying a marginal group is
+ * survivable and annoying a dominant one is not.
+ */
+export function factionModifiers(s: GameState): Modifiers {
+  const out: Modifiers = {};
+  for (const faction of s.factions ?? []) {
+    const def = FACTION_INDEX[faction.id as FactionId];
+    if (!def) continue;
+    // Neutral is 50, and there is a dead band around it: a group two points
+    // off centre is not "displeased", it is indifferent. Without the band the
+    // system applied a permanent small drag to every country at all times.
+    const offset = faction.satisfaction - 50;
+    if (Math.abs(offset) < 6) continue;
+    const mood = (offset - Math.sign(offset) * 6) / 44;
+    const weight = (faction.influence / 100) * 1.5;
+    const source = mood >= 0 ? def.pleasedModifiers : def.angeredModifiers;
+    const magnitude = Math.abs(mood) * weight;
+    for (const [key, value] of Object.entries(source) as [keyof Modifiers, number][]) {
+      out[key] = (out[key] ?? 0) + value * magnitude;
+    }
+  }
+  for (const key of Object.keys(out) as (keyof Modifiers)[]) {
+    out[key] = Math.round((out[key] ?? 0) * 100) / 100;
+  }
+  return out;
+}
+
+/** The aggregate drag every live crisis is applying, scaled by severity. */
+export function crisisModifiers(s: GameState): Modifiers {
+  const out: Modifiers = {};
+  for (const crisis of s.crises ?? []) {
+    const def = CRISIS_INDEX[crisis.defId];
+    const stage = def?.stages[crisis.stage];
+    if (!stage) continue;
+    const weight = clamp(crisis.severity / 100, 0.1, 1);
+    for (const [key, value] of Object.entries(stage.modifiers) as [keyof Modifiers, number][]) {
+      out[key] = (out[key] ?? 0) + value * weight;
+    }
+  }
+  for (const key of Object.keys(out) as (keyof Modifiers)[]) {
+    out[key] = Math.round((out[key] ?? 0) * 100) / 100;
+  }
+  return out;
 }
 
 /** Reference economy size, in $bn, that every listed cost is calibrated against. */
@@ -171,6 +205,32 @@ export function modifierSources(s: GameState): ModifierSource[] {
     out.push({ label: m.label, icon: m.icon ?? '⏳', modifiers: m.modifiers });
   }
 
+  // Live systems. These are computed rather than stored, so they always
+  // describe the state as it is right now.
+  const factions = factionModifiers(s);
+  if (Object.keys(factions).length > 0) {
+    out.push({ label: 'Interest groups', icon: '⚖️', modifiers: factions });
+  }
+
+  for (const crisis of s.crises) {
+    const def = CRISIS_INDEX[crisis.defId];
+    const stage = def?.stages[crisis.stage];
+    if (!def || !stage) continue;
+    const weight = clamp(crisis.severity / 100, 0.1, 1);
+    const scaled: Modifiers = {};
+    for (const [key, value] of Object.entries(stage.modifiers) as [keyof Modifiers, number][]) {
+      scaled[key] = Math.round(value * weight * 100) / 100;
+    }
+    out.push({ label: `${def.name} — ${stage.label}`, icon: def.icon, modifiers: scaled });
+  }
+
+  if (s.agenda) {
+    const def = AGENDA_INDEX[s.agenda.defId];
+    if (def && Object.keys(def.duringModifiers).length > 0) {
+      out.push({ label: `${def.name} (in progress)`, icon: def.icon, modifiers: def.duringModifiers });
+    }
+  }
+
   return out;
 }
 
@@ -209,10 +269,16 @@ export function baselineDeptSpend(s: GameState): Record<string, number> {
   };
 }
 
-/** Two-way trade with every partner that is neither sanctioned nor at war. */
+/**
+ * Two-way trade with every partner that can still reach you.
+ *
+ * Sanctions cut both ways: a nation you have sanctioned and a nation
+ * sanctioning you both stop trading, which is why an isolated country's trade
+ * revenue collapses whichever direction the isolation came from.
+ */
 export function activeTradeVolume(s: GameState): number {
   return s.nations.reduce(
-    (sum, n) => (n.atWarWithPlayer || n.sanctioned ? sum : sum + n.tradeVolume),
+    (sum, n) => (n.atWarWithPlayer || n.sanctioned || n.sanctioningPlayer ? sum : sum + n.tradeVolume),
     0,
   );
 }

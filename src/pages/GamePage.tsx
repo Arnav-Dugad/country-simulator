@@ -16,6 +16,9 @@ import { ConstructionPanel, ResearchPanel } from '../components/panels/ProgressP
 import { EnvironmentPanel, SocietyPanel } from '../components/panels/SocietyPanels';
 import { DiplomacyPanel, IntelligencePanel, MilitaryPanel } from '../components/panels/PowerPanels';
 import { AchievementsPanel, HistoryPanel, ObjectivesPanel } from '../components/panels/MetaPanels';
+import { CrisisPanel } from '../components/panels/CrisisPanel';
+import { FactionsPanel } from '../components/panels/FactionsPanel';
+import { WorldPanel } from '../components/panels/WorldPanel';
 
 /** Autosaves to the cloud roughly once a game-year while signed in. */
 const CLOUD_SYNC_INTERVAL_TURNS = 12;
@@ -60,6 +63,9 @@ function PanelHost({ game, panel }: { game: GameState; panel: ReturnType<typeof 
     case 'intelligence': return <IntelligencePanel game={game} />;
     case 'achievements': return <AchievementsPanel game={game} />;
     case 'history': return <HistoryPanel game={game} />;
+    case 'crises': return <CrisisPanel game={game} />;
+    case 'factions': return <FactionsPanel game={game} />;
+    case 'world': return <WorldPanel game={game} />;
     default: return <Dashboard game={game} />;
   }
 }

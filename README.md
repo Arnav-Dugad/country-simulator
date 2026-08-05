@@ -64,23 +64,68 @@ one country can chase Superpower, then Carbon Negative, then Utopia in a single 
   than the rest, because the real spread between countries is wider), sovereign bond
   issuance and repayment, debt interest that scales with your credit rating, and a full
   itemised revenue-and-spending breakdown that the engine and the UI share.
-- **Legislation** — 62 policies across 12 categories, each with real trade-offs,
+- **Legislation** — 65 policies across 12 categories, each with real trade-offs,
   prerequisites, conflicts and ideological appeal.
 - **Executive actions** — 18 direct levers you can pull between budget cycles: address
   the nation, purge the civil service, mobilise the reserves, freeze prices, declare a
   state of emergency, restructure sovereign debt. Each has a cooldown and a genuine cost
   in money, approval, civil liberties or credibility — the data-integrity suite fails
   the build if any of them is a free win.
-- **Research** — 48 technologies across 6 branches and 5 tiers.
-- **Construction** — 48 projects and wonders, each taking real months to deliver.
+- **Research** — 55 technologies across 6 branches and 5 tiers, with **parallel
+  research**. A campaign starts with one laboratory. Concurrent slots are *unlocked*,
+  not given: Research Consortia, the National Laboratory Network, the Open Science
+  Mandate and the National Academy of Sciences each grant one more, to a maximum of
+  five. Output is divided between active projects by a per-project priority weight
+  rather than multiplied — running three programmes does not make research faster, it
+  keeps three branches of the tree moving at once and stops output being stranded
+  whenever a project finishes mid-month. Anything you cannot start yet goes into a
+  **queue** that fills free slots automatically as prerequisites complete. Idle output
+  banks, and the bank is spent the instant a new project begins, or used to **rush** one
+  to completion at a premium.
+- **Construction** — 51 projects and wonders, each taking real months to deliver.
+  Buildings that consume power now genuinely draw on the grid.
 - **Society** — Population, birth/death/migration rates, age pyramid, life expectancy,
   literacy, urbanisation, happiness, health, education, crime, civil liberties, soft power.
 - **Environment & energy** — 8 generation sources, grid balance (a shortfall directly
   suppresses growth), emissions, pollution, forest cover, biodiversity, water stress,
   and a global temperature that raises disaster risk every year.
+- **Political capital** — The second currency. Money buys things; capital buys
+  permission. It accrues from approval, mandate, legislative goodwill, stability and
+  momentum, and it is spent on legislation, executive actions, crisis responses,
+  devolution, martial law and declaring a national plan. The price of a bill rises as
+  legislative support falls, so a popular leader with a hostile parliament still cannot
+  govern — and a government that has run its authority down still exists but cannot do
+  anything with it.
+- **Interest groups** — Six factions (business, labour, the armed forces, traditional
+  institutions, universities and press, the provinces) with independent satisfaction and
+  a share of national influence that shifts as the economy and the state change. Their
+  mood is a live modifier on the whole simulation, and an alienated, influential military
+  facing a government with no mandate is the precondition for a **coup**.
 - **Politics** — Parties with shifting support, a seat-by-seat parliament, coalition
   relations, elections you can lose, corruption, and provinces with their own
-  development, loyalty, unrest and autonomy.
+  development, loyalty, unrest, autonomy, **separatism**, and the option of **martial
+  law** or a standing development budget.
+- **Crises** — Eleven persistent, multi-stage situations that are conditions rather than
+  events: banking collapse, inflation spiral, sovereign debt crisis, legitimacy crisis,
+  corruption scandal, secession movement, epidemic, water crisis, energy emergency,
+  armed insurgency, brain drain. Each opens because the state genuinely reached the
+  condition described, applies a monthly drag scaled by severity, escalates on a timer,
+  and ends either in resolution or in permanent damage. Three at most run at once.
+- **National agendas** — Ten five-year plans. Declare a public target, accept a real
+  handicap for the whole term, and either deliver it for a permanent modifier and a
+  capital reward, or be seen to fail. The handicap is the point: a plan with only upside
+  would be a free bonus and everyone would run one permanently.
+- **The living world** — A global business cycle that moves through expansion, peak,
+  contraction and trough on its own; a geopolitical tension index; four blocs; foreign
+  economies and militaries that develop independently; **wars between third parties**;
+  AI governments that arm against you, sanction you and occasionally **declare war**; and
+  an inbox of unsolicited **diplomatic proposals** — treaties, contracts, aid requests,
+  demands and ultimatums — that expire whether or not you answer them.
+- **Sovereign finance** — A wealth fund that compounds against the *world* cycle rather
+  than yours, so it is worth most exactly when the domestic economy is worst; a central
+  bank you can leave independent or take direct control of at a permanent price in credit
+  rating, confidence and bond spread; a bond yield modelled separately from the policy
+  rate; and an opt-out on the automatic surplus-to-debt sweep.
 - **Diplomacy** — 61 simulated nations with independent economies, personalities and
   memory; 6 treaty types, foreign aid, sanctions, embassies and 10 international
   organisations with real accession requirements. An **interactive world map** colours
@@ -98,12 +143,32 @@ one country can chase Superpower, then Carbon Negative, then Utopia in a single 
   concrete fix: *"We are borrowing 4.2% of monthly output with debt at 137% of GDP.
   Raising income tax to 29% would close most of the gap."* Most come with a one-click
   action, and a test asserts every action the board offers actually succeeds when taken.
-- **Military & intelligence** — Five branches, five doctrines, war with a live war
-  score, casualties and peace negotiation; six covert operation types.
+
+  The board is now **contractually never silent**. A persistent **next-move strip** sits
+  under the top bar carrying the single highest-value thing to do right now — its
+  severity, the advisor's reasoning and the action itself — and when nothing is wrong it
+  falls through to the best available opportunity, because in a country there always is
+  a next thing. Expand it for the two runners-up.
+- **Military & intelligence** — Five branches with independent **funding emphasis**
+  (weights on the same budget, so favouring one arm starves the others), five doctrines,
+  an indigenous **nuclear weapons programme** that costs money every month it runs and
+  relations with everyone when it succeeds, war with a live war score, casualties and
+  peace negotiation; six covert operation types, and **per-nation intelligence dossiers**
+  that decide whether you see a rival's real strength or a stable — possibly wrong —
+  estimate.
 - **Events** — 56 branching situations with 2–3 choices each. Risky options can
   backfire, and a stable, low-corruption state with good intelligence gambles better.
-- **Scoring** — Eight capped pillars, 48 achievements across four tiers, seven victory
-  conditions (all requiring at least ten years in office), and a global leaderboard.
+- **Quality of life** — A **command palette** (`Ctrl`/`Cmd`+`K`) that searches every
+  ministry and every technology, policy, building and executive action, and runs it;
+  **keyboard shortcuts** for time, navigation and rewind (`?` for the sheet);
+  **pinnable panels**; a **one-month rewind** holding the last twelve months in memory
+  (disabled under ironman, never written to a save); filters and search on every long
+  list; affordability and political cost shown before you commit; and a preferences
+  panel for motion, confirmations and which advice surfaces are shown.
+- **Scoring** — Eight capped pillars — governance now weighs mandate, coalition health
+  and whether you govern by consent or by martial law; longevity credits plans delivered
+  and crises contained — 60 achievements across four tiers, seven victory conditions (all
+  requiring at least ten years in office), and a global leaderboard.
 - **Career profile** — Aggregate statistics across every campaign: rank and career
   points, win rate, records, most-played nation, objectives completed, a campaign
   browser and preferences. Derived entirely from save summaries, so there is one source
@@ -157,12 +222,33 @@ of severities, gamble odds, tax collection *and* the productivity frontier itsel
 Costs in the content files are written for a $1.5T economy and scaled by `costScale()`,
 so a stimulus package is the same share of GDP whether you run Fiji or the United States.
 
-The result, measured across 15 sample countries over 600 months:
+**6. A crisis has to be able to end on its own.**
+Crisis severity climbs while the situation that caused it still holds and falls
+once it has passed, whether or not the player responded. The first cut only let
+severity fall through responses, which meant a transient dip could open a crisis
+that then became unresolvable — and every campaign spiralled into permanent
+emergency. That single change took hands-off survival from 37% back to 80%.
+
+**7. Interest-group baselines are calibrated to an averagely governed country.**
+Each faction's satisfaction target is set so a state with departments near 1.0,
+default tax rates and middling corruption lands its factions around 52–58, with
+a dead band either side of neutral. Keyed too low, the system had every country
+on earth quietly alienating half its establishment before the player had done
+anything at all.
+
+The result, measured across 15 sample countries over 600 months (`survival-probe`
+runs 8 seeds each, because a single-seed comparison is meaningless once a change
+shifts the RNG stream):
 
 | Play style | Outcome |
 | --- | --- |
-| Never touch anything, always take the first option | 13/15 survive; stagnant economies, mediocre scores (6.3k–10.3k) |
-| Keep the budget near balance, keep researching, enact affordable policies | 15/15 survive or win; $20k–$284k GDP per capita, scores 9.7k–13.9k |
+| Never touch anything, always take the first option | 88% survive across 120 runs; stagnant economies, scores 6k–11k |
+| Take the top cabinet recommendation every month and fill the cabinet | No losses. Several countries reach their victory objective the month it becomes eligible — the United States wins at month 120 on 90% approval, 100 stability and zero debt |
+| Keep the budget near balance, keep researching, enact affordable policies | 15/15 survive or win; $16k–$415k GDP per capita, scores 11.7k–15.0k |
+
+The middle row is the one that matters: following the game's own advice is a
+winning strategy, and a test asserts it. If the advice were not survivable the
+advice would be wrong.
 
 ---
 
@@ -180,7 +266,7 @@ Other scripts:
 ```bash
 npm run build        # typecheck + production build to dist/
 npm run preview      # serve the production build
-npm test             # 123 tests: engine, data integrity and UI
+npm test             # engine, systems, data-integrity and UI suites
 npm run test:watch   # watch mode
 ```
 
@@ -194,6 +280,8 @@ node scripts/trajectory-probe.mjs usa # month-by-month index trajectory
 node scripts/difficulty-probe.mjs     # does the difficulty setting actually bite?
 node scripts/military-probe.mjs       # military calibration against real countries
 node scripts/content-count.mjs        # size of every content set
+node scripts/survival-probe.mjs       # hands-off survival across many seeds
+node scripts/systems-probe.mjs usa    # schema-5 subsystems month by month
 ```
 
 **The game runs fine with no configuration at all.** Without Firebase it falls back to

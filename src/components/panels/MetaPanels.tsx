@@ -8,10 +8,16 @@ import clsx from 'clsx';
 import type { GameState, LogEntry } from '../../game/types';
 import { ACHIEVEMENTS, TIER_COLORS, TOTAL_ACHIEVEMENT_POINTS } from '../../game/data/achievements';
 import { VICTORY_GOALS, VICTORY_INDEX } from '../../game/data/definitions';
+import {
+  AGENDAS, AGENDA_DECLARATION_COST, AGENDA_INDEX, AGENDA_METRIC_LABELS, readMetric, targetFor,
+} from '../../game/data/agendas';
 import { MONTH_SHORT } from '../../game/selectors';
 import { computeScore, scoreTitle, victoryProgress } from '../../game/engine/scoring';
+import { agendaMet, agendaProgress } from '../../game/engine/agenda';
 import { useGameStore } from '../../store/gameStore';
-import { Badge, Card, EmptyState, Meter, Reveal, Stat, Tabs, meterColor } from '../ui/primitives';
+import { useUiStore } from '../../store/uiStore';
+import { Badge, Button, Card, EmptyState, Meter, Reveal, Stat, Tabs, meterColor } from '../ui/primitives';
+import { ModifierList } from './ModifierList';
 import { ChartFrame, chartAxis, chartTooltip } from './chartHelpers';
 
 /* =============================== Objectives ============================= */
@@ -75,6 +81,10 @@ export function ObjectivesPanel({ game }: { game: GameState }) {
           </Card>
         </Reveal>
       )}
+
+      <Reveal delay={0.04}>
+        <AgendaSection game={game} />
+      </Reveal>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Reveal delay={0.05}>
@@ -203,6 +213,208 @@ export function ObjectivesPanel({ game }: { game: GameState }) {
       </div>
     </div>
   );
+}
+
+/* ============================ National agenda =========================== */
+
+/**
+ * Five-year plans.
+ *
+ * The one mechanic that makes the player commit in advance rather than
+ * reacting month to month: declare a public target, accept a real handicap for
+ * the duration, and either deliver it for a permanent bonus or be seen to fail.
+ */
+function AgendaSection({ game }: { game: GameState }) {
+  const { declareAgenda, abandonAgenda } = useGameStore();
+  const active = game.agenda;
+  const def = active ? AGENDA_INDEX[active.defId] : null;
+
+  if (active && def) {
+    const current = readMetric(game, def.metric);
+    const progress = agendaProgress(game) * 100;
+    const met = agendaMet(game);
+    const monthsLeft = Math.max(0, active.endsTurn - game.turn);
+
+    return (
+      <Card
+        className={clsx(met ? 'border-aurora-lime/35 bg-aurora-lime/[0.04]' : 'border-gold-500/30 bg-gold-500/[0.04]')}
+        title={def.name}
+        icon={def.icon}
+        subtitle={`Five-year plan · ${monthsLeft} month${monthsLeft === 1 ? '' : 's'} remaining`}
+        action={<Badge tone={met ? 'good' : 'gold'}>{met ? 'On target' : 'Behind'}</Badge>}
+      >
+        <p className="text-xs leading-relaxed text-slate-400">{def.description}</p>
+
+        <div className="mt-4">
+          <div className="mb-1.5 flex items-baseline justify-between gap-2">
+            <span className="text-xs text-slate-300">{AGENDA_METRIC_LABELS[def.metric]}</span>
+            <span className="num text-xs font-semibold text-white">
+              {formatMetric(def.metric, current)}
+              <span className="text-slate-600">
+                {' '}
+                from {formatMetric(def.metric, active.baseline)} → {formatMetric(def.metric, active.target)}
+              </span>
+            </span>
+          </div>
+          <Meter value={progress} height={7} color={met ? '#7ee787' : undefined} />
+        </div>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+              Costing us while it runs
+            </p>
+            <ModifierList modifiers={def.duringModifiers} />
+          </div>
+          <div>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+              Permanent, if delivered
+            </p>
+            <ModifierList modifiers={def.rewardModifiers} />
+            <p className="num mt-1 text-[10px] text-aurora-violet">+{def.rewardCapital} political capital</p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/[0.07] pt-3">
+          <p className="text-[11px] leading-relaxed text-slate-500">
+            Missing the target costs approval, mandate and momentum. Abandoning it early costs more.
+          </p>
+          <Button size="sm" variant="ghost" onClick={abandonAgenda}>
+            Abandon
+          </Button>
+        </div>
+      </Card>
+    );
+  }
+
+  const affordable = game.governance.capital >= AGENDA_DECLARATION_COST;
+
+  return (
+    <Card
+      title="Declare a five-year plan"
+      icon="🗓️"
+      subtitle={`Costs ${AGENDA_DECLARATION_COST} political capital. You have ${Math.floor(game.governance.capital)}.`}
+    >
+      <p className="mb-3 text-xs leading-relaxed text-slate-400">
+        A plan stakes the government publicly on one measurable target over sixty months. It imposes a real
+        handicap for the whole term — that is what makes it a commitment rather than a bonus — and pays a
+        permanent modifier plus political capital if you deliver it.
+      </p>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {AGENDAS.map((option) => {
+          const done = game.agendasCompleted.includes(option.id);
+          const baseline = readMetric(game, option.metric);
+          const target = targetFor(option, baseline);
+          return (
+            <button
+              key={option.id}
+              disabled={!affordable || done}
+              onClick={() => declareAgenda(option.id)}
+              className={clsx(
+                'focus-ring rounded-xl border p-3 text-left transition',
+                done
+                  ? 'cursor-default border-aurora-lime/25 bg-aurora-lime/[0.04] opacity-70'
+                  : affordable
+                    ? 'border-white/10 hover:border-gold-500/40 hover:bg-gold-500/[0.06]'
+                    : 'cursor-not-allowed border-white/[0.05] opacity-50',
+              )}
+            >
+              <span className="flex items-center gap-1.5">
+                <span>{option.icon}</span>
+                <span className="text-xs font-semibold text-white">{option.name}</span>
+                {done && <Badge tone="good">Delivered</Badge>}
+              </span>
+              <span className="mt-1 block text-[11px] leading-relaxed text-slate-400">{option.description}</span>
+              <span className="num mt-1.5 block text-[10px] text-slate-500">
+                Target: {AGENDA_METRIC_LABELS[option.metric]} {formatMetric(option.metric, baseline)} →{' '}
+                {formatMetric(option.metric, target)}
+              </span>
+              <span className="mt-1.5 block">
+                <ModifierList modifiers={option.rewardModifiers} limit={3} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+/* ============================== Preferences ============================= */
+
+const PREFERENCE_ROWS: { key: 'showNextMove' | 'showTutorial' | 'confirmRisky' | 'reduceMotion' | 'autosaveToCloud'; label: string; hint: string }[] = [
+  {
+    key: 'showNextMove',
+    label: 'Next-move strip',
+    hint: 'Keeps one line of live advice under the top bar, with its action attached.',
+  },
+  {
+    key: 'showTutorial',
+    label: 'Cabinet advice on the dashboard',
+    hint: 'Shows the full advisory board in the Situation Room.',
+  },
+  {
+    key: 'confirmRisky',
+    label: 'Confirm irreversible actions',
+    hint: 'Asks before declaring war, repealing legislation or breaking a contract.',
+  },
+  {
+    key: 'reduceMotion',
+    label: 'Reduce motion',
+    hint: 'Removes panel transitions. Useful on slower machines.',
+  },
+  {
+    key: 'autosaveToCloud',
+    label: 'Autosave to the cloud',
+    hint: 'Pushes a save roughly once a game-year while signed in.',
+  },
+];
+
+/** Everything the player can change about how the game presents itself. */
+function PreferencesCard() {
+  const prefs = useUiStore((s) => s.prefs);
+  const setPref = useUiStore((s) => s.setPref);
+
+  return (
+    <Card title="Preferences" subtitle="Stored on this device, not in the save" icon="⚙️">
+      <div className="space-y-2">
+        {PREFERENCE_ROWS.map((row) => {
+          const on = Boolean(prefs[row.key]);
+          return (
+            <button
+              key={row.key}
+              onClick={() => setPref(row.key, !on)}
+              className="focus-ring flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-white/[0.03]"
+              role="switch"
+              aria-checked={on}
+            >
+              <span
+                className={clsx(
+                  'mt-0.5 flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 transition',
+                  on ? 'justify-end bg-gold-500' : 'justify-start bg-white/15',
+                )}
+              >
+                <span className="block h-3 w-3 rounded-full bg-white" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-medium text-white">{row.label}</span>
+                <span className="block text-[11px] leading-relaxed text-slate-500">{row.hint}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+/** Formats an agenda metric the way the rest of the game shows that number. */
+function formatMetric(metric: string, value: number): string {
+  if (metric === 'gdpPerCapita') return `$${Math.round(value).toLocaleString()}`;
+  if (metric === 'unemployment' || metric === 'renewableShare') return `${value.toFixed(1)}%`;
+  if (metric === 'researchCompleted') return value.toFixed(0);
+  return value.toFixed(0);
 }
 
 /* ============================== Achievements ============================ */
@@ -343,7 +555,34 @@ export function HistoryPanel({ game }: { game: GameState }) {
           <Stat label="Entries recorded" value={game.log.length} accent="#4f8cff" />
           <Stat label="Months elapsed" value={game.turn} accent="#f5d073" />
           <Stat label="Terms served" value={game.termsServed} accent="#7ee787" />
-          <Stat label="Events resolved" value={Object.keys(game.eventCooldowns).length} accent="#9d6bff" />
+          <Stat label="Events resolved" value={game.records.eventsResolved} accent="#9d6bff" />
+        </div>
+      </Reveal>
+
+      <Reveal delay={0.03}>
+        <div className="grid gap-5 lg:grid-cols-2">
+          <Card title="Campaign records" subtitle="The high-water marks of this government" icon="🏅">
+            <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+              {[
+                { label: 'Peak GDP', value: `$${game.records.peakGdp >= 1000 ? `${(game.records.peakGdp / 1000).toFixed(2)}T` : `${game.records.peakGdp.toFixed(0)}B`}` },
+                { label: 'Peak score', value: game.records.peakScore.toLocaleString() },
+                { label: 'Peak approval', value: `${game.records.peakApproval.toFixed(0)}%` },
+                { label: 'Peak population', value: game.records.peakPopulation.toLocaleString() },
+                { label: 'Cleanest government', value: `${game.records.lowestCorruption.toFixed(0)} corruption` },
+                { label: 'Wars won / lost', value: `${game.records.warsWon} / ${game.records.warsLost}` },
+                { label: 'Crises resolved', value: game.records.crisesResolved },
+                { label: 'Bills passed', value: game.governance.billsPassed },
+                { label: 'Plans delivered', value: game.agendasCompleted.length },
+              ].map((row) => (
+                <div key={row.label} className="flex items-baseline justify-between gap-3">
+                  <dt className="text-xs text-slate-400">{row.label}</dt>
+                  <dd className="num text-xs font-semibold text-white">{row.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </Card>
+
+          <PreferencesCard />
         </div>
       </Reveal>
 

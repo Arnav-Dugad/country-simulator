@@ -9,7 +9,7 @@ import { GOVERNMENT_INDEX, IDEOLOGY_INDEX } from '../../game/data/definitions';
 import { formatMoney, formatPopulation } from '../../game/selectors';
 import { policyAvailability } from '../../game/engine/actions';
 import { useGameStore } from '../../store/gameStore';
-import { Badge, Button, Card, EmptyState, Meter, Reveal, Slider, Stat, Tabs, meterColor } from '../ui/primitives';
+import { Badge, Button, Card, EmptyState, Meter, Reveal, Slider, Stat, Tabs, Tooltip, meterColor } from '../ui/primitives';
 import { ModifierList } from './ModifierList';
 import { AdvisoryBoard } from './AdvisoryBoard';
 import { chartTooltip } from './chartHelpers';
@@ -47,7 +47,12 @@ export function PoliciesPanel({ game }: { game: GameState }) {
       <Reveal>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Policies enacted" value={game.activePolicies.length} accent="#f5d073" />
-          <Stat label="Available" value={POLICIES.length - game.activePolicies.length} accent="#4f8cff" />
+          <Stat
+            label="Political capital"
+            value={Math.floor(game.governance.capital)}
+            hint={`${game.governance.capitalPerMonth >= 0 ? '+' : ''}${game.governance.capitalPerMonth.toFixed(1)}/mo`}
+            accent="#9d6bff"
+          />
           <Stat
             label="Programme cost"
             value={formatMoney(
@@ -119,7 +124,32 @@ export function PoliciesPanel({ game }: { game: GameState }) {
                         {formatMoney(policy.monthlyCost * Math.max(0.0025, game.economy.gdp / 1500), symbol)}
                       </dd>
                     </div>
+                    {!active && (
+                      <>
+                        <div className="flex justify-between">
+                          <dt className="text-slate-500">Political capital</dt>
+                          <dd
+                            className={clsx(
+                              'num',
+                              game.governance.capital >= availability.politicalCost ? 'text-aurora-violet' : 'text-aurora-red',
+                            )}
+                          >
+                            {availability.politicalCost}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between">
+                          <dt className="text-slate-500">Expected support</dt>
+                          <dd className="num" style={{ color: meterColor(availability.support) }}>
+                            {availability.support.toFixed(0)}%
+                          </dd>
+                        </div>
+                      </>
+                    )}
                   </dl>
+
+                  {!active && availability.note && (
+                    <p className="mt-2 text-[10px] leading-relaxed text-slate-500">{availability.note}</p>
+                  )}
 
                   <div className="mt-4">
                     {active ? (
@@ -163,9 +193,19 @@ export function PoliticsPanel({ game }: { game: GameState }) {
     <div className="space-y-5">
       <Reveal>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label="Approval" value={`${game.approval.toFixed(0)}%`} accent="#4f8cff" />
-          <Stat label="Stability" value={game.stability.toFixed(0)} accent="#7ee787" />
-          <Stat label="Corruption" value={game.corruption.toFixed(0)} accent="#ff5c6c" hint="Lower is better" />
+          <Stat
+            label="Political capital"
+            value={Math.floor(game.governance.capital)}
+            hint={`${game.governance.capitalPerMonth >= 0 ? '+' : ''}${game.governance.capitalPerMonth.toFixed(1)}/mo · cap ${Math.round(game.governance.capitalCap)}`}
+            accent="#9d6bff"
+          />
+          <Stat label="Mandate" value={game.governance.mandate.toFixed(0)} hint="How legitimate you are seen to be" accent="#4f8cff" />
+          <Stat
+            label="Legislative support"
+            value={`${game.governance.legislativeSupport.toFixed(0)}%`}
+            hint={`${game.governance.billsPassed} bills passed`}
+            accent="#7ee787"
+          />
           <Stat
             label={gov.holdsElections ? 'Next election' : 'Government'}
             value={gov.holdsElections ? (game.monthsToElection > 0 ? `${game.monthsToElection}mo` : 'Now') : gov.icon}
@@ -173,6 +213,80 @@ export function PoliticsPanel({ game }: { game: GameState }) {
             accent="#f5d073"
           />
         </div>
+      </Reveal>
+
+      <Reveal delay={0.03}>
+        <Card
+          title="Political capital"
+          subtitle="Money buys things. Capital buys permission."
+          icon="🏛️"
+          action={
+            <Badge tone={game.governance.capital > 40 ? 'good' : game.governance.capital > 12 ? 'warn' : 'bad'}>
+              {Math.floor(game.governance.capital)} / {Math.round(game.governance.capitalCap)}
+            </Badge>
+          }
+        >
+          <Meter value={game.governance.capital} max={Math.max(1, game.governance.capitalCap)} height={7} color="#9d6bff" />
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+                What earns it, per month
+              </p>
+              {[
+                { label: 'Base (this government type)', value: gov.holdsElections ? 1.4 : 2.4 },
+                { label: `Approval (${game.approval.toFixed(0)})`, value: (game.approval - 35) * 0.09 },
+                { label: `Mandate (${game.governance.mandate.toFixed(0)})`, value: (game.governance.mandate - 45) * 0.05 },
+                { label: `Legislature (${game.governance.legislativeSupport.toFixed(0)}%)`, value: (game.governance.legislativeSupport - 40) * 0.045 },
+                { label: `Stability (${game.stability.toFixed(0)})`, value: (game.stability - 45) * 0.035 },
+                { label: 'Momentum', value: game.governance.momentum * 0.02 },
+                { label: `Corruption (${game.corruption.toFixed(0)})`, value: -game.corruption * 0.012 },
+              ].map((row) => (
+                <div key={row.label} className="flex items-baseline justify-between gap-2 text-[11px]">
+                  <span className="truncate text-slate-400">{row.label}</span>
+                  <span className={clsx('num shrink-0 font-semibold', row.value >= 0 ? 'text-aurora-lime' : 'text-aurora-red')}>
+                    {row.value >= 0 ? '+' : ''}
+                    {row.value.toFixed(2)}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">What spends it</p>
+              <ul className="space-y-1.5 text-[11px] leading-relaxed text-slate-400">
+                <li>
+                  <span className="font-semibold text-slate-200">Legislation.</span> The price rises as
+                  legislative support falls — you are buying votes you do not have.
+                </li>
+                <li>
+                  <span className="font-semibold text-slate-200">Executive actions.</span> Acting by decree is
+                  fast and spends standing instead of consultation.
+                </li>
+                <li>
+                  <span className="font-semibold text-slate-200">Crisis responses.</span> The serious ones are
+                  political decisions, not purchases.
+                </li>
+                <li>
+                  <span className="font-semibold text-slate-200">Devolution and martial law.</span> Both change
+                  the constitutional settlement, so both cost authority rather than money.
+                </li>
+                <li>
+                  <span className="font-semibold text-slate-200">Declaring a five-year plan.</span>
+                </li>
+              </ul>
+              <p className="pt-1 text-[11px] leading-relaxed text-slate-500">
+                Momentum is currently{' '}
+                <span className={clsx('num font-semibold', game.governance.momentum >= 0 ? 'text-aurora-lime' : 'text-aurora-red')}>
+                  {game.governance.momentum >= 0 ? '+' : ''}
+                  {game.governance.momentum.toFixed(0)}
+                </span>
+                . It rises when you resolve crises and pass bills, falls when things go wrong, and decays
+                toward zero on its own.
+              </p>
+            </div>
+          </div>
+        </Card>
       </Reveal>
 
       <div className="grid gap-5 lg:grid-cols-2">
@@ -393,10 +507,13 @@ const SPECIALTY_META: Record<string, { icon: string; label: string }> = {
 };
 
 export function ProvincesPanel({ game }: { game: GameState }) {
-  const { investInProvince, grantAutonomy } = useGameStore();
+  const { investInProvince, grantAutonomy, setMartialLaw, setProvinceInvestment } = useGameStore();
   const symbol = game.identity.currency.symbol;
   const [amounts, setAmounts] = useState<Record<string, number>>({});
   const defaultInvestment = Math.max(20, Math.round((game.economy.gdp * 1000) / 12 / 20));
+  const standingCap = Math.max(1, Math.round(((game.economy.gdp * 1000) / 12) * 0.05));
+  const standingTotal = game.provinces.reduce((sum, p) => sum + p.investment, 0);
+  const worstSeparatism = Math.max(0, ...game.provinces.map((p) => p.separatism));
 
   return (
     <div className="space-y-5">
@@ -409,12 +526,17 @@ export function ProvincesPanel({ game }: { game: GameState }) {
             accent="#7ee787"
           />
           <Stat
-            label="Average unrest"
-            value={(game.provinces.reduce((s, p) => s + p.unrest, 0) / game.provinces.length).toFixed(0)}
-            accent="#ff5c6c"
-            hint="Lower is better"
+            label="Highest separatism"
+            value={worstSeparatism.toFixed(0)}
+            hint="A movement opens above 62"
+            accent={worstSeparatism > 50 ? '#ff5c6c' : '#ffb648'}
           />
-          <Stat label="Urbanisation" value={`${game.society.urbanisation.toFixed(0)}%`} accent="#9d6bff" />
+          <Stat
+            label="Standing investment"
+            value={formatMoney(standingTotal, symbol)}
+            hint="Per month, across all provinces"
+            accent="#9d6bff"
+          />
         </div>
       </Reveal>
 
@@ -424,13 +546,20 @@ export function ProvincesPanel({ game }: { game: GameState }) {
           const amount = amounts[province.id] ?? defaultInvestment;
           return (
             <Reveal key={province.id} delay={Math.min(0.3, i * 0.04)}>
-              <Card title={province.name} icon={meta.icon} subtitle={`${meta.label} · ${formatPopulation(province.population * 1e6)} people`}>
+              <Card
+                className={clsx(province.separatism > 55 && 'border-aurora-red/30 bg-aurora-red/[0.03]')}
+                title={province.name}
+                icon={meta.icon}
+                subtitle={`${meta.label} · ${formatPopulation(province.population * 1e6)} people`}
+                action={province.martialLaw ? <Badge tone="bad">Martial law</Badge> : null}
+              >
                 <div className="space-y-3">
                   {[
                     { label: 'Development', value: province.development },
                     { label: 'Loyalty', value: province.loyalty },
                     { label: 'Unrest', value: province.unrest, inverted: true },
                     { label: 'Autonomy', value: province.autonomy, inverted: true },
+                    { label: 'Separatism', value: province.separatism, inverted: true },
                   ].map((row) => (
                     <div key={row.label}>
                       <div className="mb-1 flex items-baseline justify-between">
@@ -450,7 +579,7 @@ export function ProvincesPanel({ game }: { game: GameState }) {
 
                 <div className="mt-4 space-y-3 border-t border-white/[0.07] pt-3">
                   <Slider
-                    label="Investment"
+                    label="One-off investment"
                     value={amount}
                     min={Math.round(defaultInvestment / 4)}
                     max={defaultInvestment * 8}
@@ -468,10 +597,40 @@ export function ProvincesPanel({ game }: { game: GameState }) {
                     >
                       Invest
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => grantAutonomy(province.id)} title="Reduces unrest, raises autonomy">
-                      Devolve
-                    </Button>
+                    <Tooltip label="Costs 6 political capital. The durable answer to separatism.">
+                      <Button size="sm" variant="ghost" onClick={() => grantAutonomy(province.id)}>
+                        Devolve
+                      </Button>
+                    </Tooltip>
                   </div>
+
+                  <Slider
+                    label="Standing monthly budget"
+                    value={province.investment}
+                    min={0}
+                    max={standingCap}
+                    step={Math.max(1, Math.round(standingCap / 20))}
+                    onChange={(v) => setProvinceInvestment(province.id, v)}
+                    format={(v) => (v > 0 ? `${formatMoney(v, symbol)}/mo` : 'None')}
+                    hint="Paid every month and shows up in the budget. Slower than a lump sum, and it is what actually bleeds separatism away."
+                  />
+
+                  <Tooltip
+                    label={
+                      province.martialLaw
+                        ? 'Restores civil administration. Loyalty recovers.'
+                        : 'Costs 10 political capital. Suppresses unrest hard, and costs loyalty, liberties and standing every month it lasts.'
+                    }
+                  >
+                    <Button
+                      size="sm"
+                      variant={province.martialLaw ? 'secondary' : 'ghost'}
+                      full
+                      onClick={() => setMartialLaw(province.id, !province.martialLaw)}
+                    >
+                      {province.martialLaw ? 'Lift martial law' : 'Declare martial law'}
+                    </Button>
+                  </Tooltip>
                 </div>
               </Card>
             </Reveal>

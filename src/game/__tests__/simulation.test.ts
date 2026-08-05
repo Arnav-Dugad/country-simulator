@@ -16,6 +16,10 @@ import { BUILDING_INDEX } from '../data/buildings';
 import { POLICY_INDEX } from '../data/policies';
 import { TECH_INDEX } from '../data/technologies';
 import { allRecommendations } from '../engine/advisory';
+import { respondToCrisis } from '../engine/crises';
+import { acceptOffer, declineOffer } from '../engine/world';
+import { declareAgenda } from '../engine/agenda';
+import { AGENDA_INDEX } from '../data/agendas';
 import { availableQuantity, quotedPrice, tradeEligibility } from '../engine/trade';
 import { agreementFlow, tradeAgreementBalance } from '../selectors';
 import {
@@ -44,6 +48,7 @@ import {
   toggleSanctions,
   setBudget,
   setTax,
+  setBranchFunding,
   setVictoryGoal,
   startConstruction,
   startResearch,
@@ -404,6 +409,10 @@ describe('executive actions', () => {
   it('enacts every decree whose conditions can be met, and respects cooldowns', () => {
     const s = createGame(setupFor('germany'), 12);
     s.economy.treasury = 1e9;
+    // Executive actions now cost political capital as well as money, so the
+    // sweep has to be funded on both axes to exercise every decree.
+    s.governance.capital = 1e5;
+    s.governance.capitalCap = 1e5;
     s.research.completed = TECHNOLOGIES.map((t) => t.id);
 
     let enacted = 0;
@@ -429,6 +438,7 @@ describe('executive actions', () => {
   it('lets a decree be used again once its cooldown expires', () => {
     const s = createGame(setupFor('japan'), 13);
     s.economy.treasury = 1e9;
+    s.governance.capital = 1e5;
 
     expect(enactDecree(s, 'national-address').ok).toBe(true);
     const cooldown = DECREE_INDEX['national-address'].cooldown;
@@ -445,6 +455,7 @@ describe('executive actions', () => {
   it('applies the bespoke side effects that plain effect blocks cannot express', () => {
     const s = createGame(setupFor('brazil'), 14);
     s.economy.treasury = 1e9;
+    s.governance.capital = 1e5;
     s.economy.debt = 1000;
     s.economy.creditRating = 80;
 
@@ -470,6 +481,7 @@ describe('executive actions', () => {
     const s = createGame(setupFor('india', { neverEndGame: true }), 16);
     for (let i = 0; i < 600; i++) {
       autoResolve(s);
+      s.governance.capital = 1e5;
       // Fire anything that is ready, every single month.
       for (const decree of DECREES) {
         if (decreeAvailability(s, decree.id).enabled) enactDecree(s, decree.id);
@@ -487,6 +499,7 @@ describe('advisory board', () => {
       'dashboard', 'economy', 'budget', 'policies', 'decrees', 'research', 'construction',
       'society', 'environment', 'military', 'diplomacy', 'trade', 'intelligence',
       'provinces', 'politics', 'cabinet', 'objectives', 'achievements', 'history',
+      'crises', 'factions', 'world',
     ]);
 
     // Sweep a wide spread of states so most advice branches actually fire.
@@ -537,6 +550,16 @@ describe('advisory board', () => {
           case 'org': expect(ORG_INDEX[action.id as never], `${rec.id} -> org ${action.id}`).toBeDefined(); break;
           case 'budget': expect(s.budget[action.dept], `${rec.id} -> dept ${action.dept}`).toBeDefined(); break;
           case 'tax': expect(s.taxes[action.key], `${rec.id} -> tax ${action.key}`).toBeDefined(); break;
+          case 'crisis':
+            expect(s.crises.some((c) => c.id === action.crisisId), `${rec.id} -> crisis ${action.crisisId}`).toBe(true);
+            break;
+          case 'offer':
+            expect(s.offers.some((o) => o.id === action.offerId), `${rec.id} -> offer ${action.offerId}`).toBe(true);
+            break;
+          case 'agenda': expect(AGENDA_INDEX[action.id], `${rec.id} -> agenda ${action.id}`).toBeDefined(); break;
+          case 'branch':
+            expect(s.military.branchFunding[action.branch], `${rec.id} -> branch ${action.branch}`).toBeDefined();
+            break;
         }
       }
     }
@@ -548,6 +571,7 @@ describe('advisory board', () => {
     // must pass its own availability check at the moment it is offered.
     const s = createGame(setupFor('brazil'), 41);
     s.economy.treasury = 1e9;
+    s.governance.capital = 1e5;
 
     for (let round = 0; round < 40; round++) {
       for (const rec of allRecommendations(s)) {
@@ -562,12 +586,23 @@ describe('advisory board', () => {
           case 'org': result = joinOrg(s, action.id as never); break;
           case 'budget': result = setBudget(s, action.dept, action.level); break;
           case 'tax': result = setTax(s, action.key, action.value); break;
+          case 'crisis':
+            result = respondToCrisis(s, action.crisisId, action.responseId, () => {});
+            break;
+          case 'offer':
+            result = action.accept
+              ? acceptOffer(s, action.offerId, () => {})
+              : declineOffer(s, action.offerId, () => {});
+            break;
+          case 'agenda': result = declareAgenda(s, action.id); break;
+          case 'branch': result = setBranchFunding(s, action.branch, action.weight); break;
         }
         expect(result?.ok, `${rec.id} suggested "${action.label}" but it failed: ${result?.message}`).toBe(true);
       }
       autoResolve(s);
       tick(s);
       s.economy.treasury = 1e9;
+      s.governance.capital = 1e5;
     }
     assertInvariants(s, 'brazil/advisory-actions');
   });
@@ -785,9 +820,12 @@ describe('save migration', () => {
 describe('player actions', () => {
   it('enacts every policy whose prerequisites can be met', () => {
     const s = createGame(setupFor('usa'), 1);
-    // Give the player everything so requirements resolve.
+    // Give the player everything so requirements resolve — including the
+    // political capital the legislature now charges for a bill.
     s.research.completed = TECHNOLOGIES.map((t) => t.id);
     s.economy.treasury = 1e9;
+    s.governance.capital = 1e6;
+    s.governance.capitalCap = 1e6;
     s.stability = 95;
 
     let enacted = 0;

@@ -173,6 +173,48 @@ export const ACHIEVEMENTS: Achievement[] = [
   { id: 'builder', name: 'Master Builder', icon: '🏗️', tier: 'silver', points: 30,
     description: 'Complete fifty construction projects.',
     check: (s) => Object.values(s.buildings).reduce((a, b) => a + b, 0) >= 50 },
+
+  /* ------------------------- New systems (v5) ---------------------------- */
+  { id: 'parallel-labs', name: 'Two Fronts of Knowledge', icon: '🔗', tier: 'silver', points: 25,
+    description: 'Run two research programmes at the same time.',
+    check: (s) => s.research.active.length >= 2 },
+  { id: 'full-laboratories', name: 'The Whole Academy', icon: '🏛️', tier: 'gold', points: 65,
+    description: 'Unlock every research slot and keep all five occupied.',
+    check: (s) => s.research.active.length >= 5 },
+  { id: 'coalition-builder', name: 'Coalition Builder', icon: '⚖️', tier: 'gold', points: 60,
+    description: 'Hold every interest group above 65 satisfaction at once.',
+    check: (s) => s.factions.length > 0 && s.factions.every((f) => f.satisfaction >= 65) },
+  { id: 'crisis-manager', name: 'Crisis Manager', icon: '🧯', tier: 'gold', points: 55,
+    description: 'Resolve five crises before they reach their final stage.',
+    check: (s) => s.records.crisesResolved >= 5 },
+  { id: 'unshakeable', name: 'Unshakeable', icon: '🛡️', tier: 'platinum', points: 90, hidden: true,
+    description: 'Reach fifty years in office having never let a crisis run its full course.',
+    check: (s) => s.turn >= 600 && s.records.crisesResolved >= 3 && s.crises.length === 0 },
+  { id: 'planner', name: 'The Planner', icon: '🗓️', tier: 'gold', points: 60,
+    description: 'Deliver three five-year plans.',
+    check: (s) => s.agendasCompleted.length >= 3 },
+  { id: 'total-mandate', name: 'Total Mandate', icon: '🗳️', tier: 'gold', points: 55,
+    description: 'Hold a mandate above 85 with legislative support above 70%.',
+    check: (s) => s.governance.mandate >= 85 && s.governance.legislativeSupport >= 70 },
+  { id: 'endowed', name: 'The Endowment', icon: '🏦', tier: 'gold', points: 50,
+    description: 'Build a sovereign wealth fund worth more than a year of output.',
+    check: (s) => s.economy.sovereignFund >= s.economy.gdp * 1000 },
+  { id: 'legislator', name: 'Legislator', icon: '📜', tier: 'silver', points: 35,
+    description: 'Pass thirty bills through the legislature.',
+    check: (s) => s.governance.billsPassed >= 30 },
+  { id: 'kingmaker', name: 'Kingmaker', icon: '🤝', tier: 'silver', points: 30,
+    description: 'Accept ten proposals brought to you by foreign governments.',
+    check: (s) => s.treaties.length + s.tradeAgreements.length >= 10 },
+  { id: 'unbowed', name: 'Unbowed', icon: '✋', tier: 'gold', points: 50, hidden: true,
+    description: 'Refuse an ultimatum from a stronger power and never lose the war that follows.',
+    check: (s) =>
+      s.turn > 60 &&
+      s.records.warsLost === 0 &&
+      s.nations.some((n) => n.threatPerception > 70 && n.militaryStrength > s.military.strength) },
+  { id: 'no-martial-law', name: 'Governed by Consent', icon: '🕊️', tier: 'platinum', points: 85,
+    description: 'Pass fifty years with high stability and never once declare martial law.',
+    check: (s) =>
+      s.turn >= 600 && s.stability >= 65 && s.provinces.every((p) => !p.martialLaw && p.separatism < 40) },
 ];
 
 export const ACHIEVEMENT_INDEX = Object.fromEntries(

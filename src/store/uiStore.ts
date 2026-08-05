@@ -20,31 +20,46 @@ export type PanelId = PanelTarget;
 
 interface UiState {
   panel: PanelId;
+  /** Panels visited, newest first — powers "recent" in the command palette. */
+  recentPanels: PanelId[];
   toasts: Toast[];
   prefs: Preferences;
   sidebarOpen: boolean;
   /** Country id shown in the diplomacy detail pane. */
   selectedNation: string | null;
+  /** Whether the command palette is open. */
+  paletteOpen: boolean;
+  /** Whether the keyboard-shortcut sheet is open. */
+  helpOpen: boolean;
 
   setPanel: (panel: PanelId) => void;
   notify: (kind: ToastKind, title: string, body: string) => void;
   dismiss: (id: string) => void;
   setPref: <K extends keyof Preferences>(key: K, value: Preferences[K]) => void;
+  togglePinned: (panel: PanelId) => void;
   toggleSidebar: () => void;
   setSidebar: (open: boolean) => void;
   selectNation: (id: string | null) => void;
+  setPalette: (open: boolean) => void;
+  setHelp: (open: boolean) => void;
 }
 
 let toastSeq = 0;
 
 export const useUiStore = create<UiState>((set, get) => ({
   panel: 'dashboard',
+  recentPanels: [],
   toasts: [],
   prefs: readPreferences(),
   sidebarOpen: false,
   selectedNation: null,
+  paletteOpen: false,
+  helpOpen: false,
 
-  setPanel: (panel) => set({ panel, sidebarOpen: false }),
+  setPanel: (panel) => {
+    const recent = [panel, ...get().recentPanels.filter((p) => p !== panel)].slice(0, 6);
+    set({ panel, recentPanels: recent, sidebarOpen: false, paletteOpen: false });
+  },
 
   notify: (kind, title, body) => {
     const id = `toast-${++toastSeq}`;
@@ -61,7 +76,20 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ prefs });
   },
 
+  /** Pins or unpins a panel at the top of the navigation. */
+  togglePinned: (panel) => {
+    const current = get().prefs.pinnedPanels ?? [];
+    const next = current.includes(panel)
+      ? current.filter((p) => p !== panel)
+      : [...current, panel].slice(0, 8);
+    const prefs = { ...get().prefs, pinnedPanels: next };
+    writePreferences(prefs);
+    set({ prefs });
+  },
+
   toggleSidebar: () => set({ sidebarOpen: !get().sidebarOpen }),
   setSidebar: (open) => set({ sidebarOpen: open }),
   selectNation: (id) => set({ selectedNation: id }),
+  setPalette: (open) => set({ paletteOpen: open }),
+  setHelp: (open) => set({ helpOpen: open }),
 }));
