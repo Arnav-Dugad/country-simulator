@@ -12,9 +12,11 @@ import {
   gdpPerCapita, totalModifiers,
 } from '../../game/selectors';
 import { frontierPerCapita } from '../../game/engine/tick';
+import { Inspect } from '../game/Inspector';
+import { useUiStore } from '../../store/uiStore';
 import { BUDGET_MAX, TAX_LIMITS } from '../../game/engine/actions';
 import { useGameStore } from '../../store/gameStore';
-import { Badge, Button, Card, Meter, Reveal, Slider, Stat, Tooltip } from '../ui/primitives';
+import { Badge, Button, Card, ConfirmButton, Meter, Reveal, Slider, Stat, Tooltip } from '../ui/primitives';
 import { ChartFrame, chartAxis, chartTooltip } from './chartHelpers';
 
 /* ================================ Economy =============================== */
@@ -42,11 +44,19 @@ export function EconomyPanel({ game }: { game: GameState }) {
       <Reveal>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Real growth" value={`${game.economy.growth.toFixed(2)}%`} accent="#7ee787"
-            icon={game.economy.growth >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+            icon={
+              <span className="flex items-center gap-0.5">
+                {game.economy.growth >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                <Inspect game={game} id="growth" label="growth" />
+              </span>
+            }
             hint="Annualised" />
-          <Stat label="Inflation" value={`${game.economy.inflation.toFixed(2)}%`} accent="#ffb648" hint="Target 2%" />
-          <Stat label="Unemployment" value={`${game.economy.unemployment.toFixed(1)}%`} accent="#4f8cff" />
-          <Stat label="Productivity" value={game.economy.productivity.toFixed(0)} accent="#9d6bff" hint="Index, 100 = baseline" />
+          <Stat label="Inflation" value={`${game.economy.inflation.toFixed(2)}%`} accent="#ffb648" hint="Target 2%"
+            icon={<Inspect game={game} id="inflation" label="inflation" />} />
+          <Stat label="Unemployment" value={`${game.economy.unemployment.toFixed(1)}%`} accent="#4f8cff"
+            icon={<Inspect game={game} id="unemployment" label="unemployment" />} />
+          <Stat label="Productivity" value={game.economy.productivity.toFixed(0)} accent="#9d6bff" hint="Index, 100 = baseline"
+            icon={<Inspect game={game} id="productivity" label="productivity" />} />
         </div>
       </Reveal>
 
@@ -526,6 +536,7 @@ function SovereignFundCard({ game }: { game: GameState }) {
  */
 function CentralBankCard({ game }: { game: GameState }) {
   const { setCentralBankIndependence, setPolicyRate } = useGameStore();
+  const confirmRisky = useUiStore((s) => s.prefs.confirmRisky);
   const independent = game.economy.centralBankIndependent;
 
   return (
@@ -573,14 +584,27 @@ function CentralBankCard({ game }: { game: GameState }) {
       )}
 
       <div className="mt-4">
-        <Button
+        <ConfirmButton
           size="sm"
           variant={independent ? 'secondary' : 'primary'}
           full
-          onClick={() => setCentralBankIndependence(!independent)}
+          needsConfirmation={confirmRisky && independent}
+          confirm={{
+            title: 'Take direct control of the policy rate?',
+            danger: true,
+            confirmLabel: 'Take control',
+            body: (
+              <>
+                Markets price a captured central bank immediately and permanently: a rating downgrade, a confidence
+                hit, and a standing spread on every bond issued afterwards. Restoring independence later recovers only
+                part of it. Inflation becomes yours to manage by hand.
+              </>
+            ),
+          }}
+          onConfirm={() => setCentralBankIndependence(!independent)}
         >
           {independent ? 'Take direct control of the rate' : 'Restore central bank independence'}
-        </Button>
+        </ConfirmButton>
       </div>
 
       <p className="mt-3 text-[11px] leading-relaxed text-slate-500">

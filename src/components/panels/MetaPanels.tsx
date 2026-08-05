@@ -12,6 +12,7 @@ import {
   AGENDAS, AGENDA_DECLARATION_COST, AGENDA_INDEX, AGENDA_METRIC_LABELS, readMetric, targetFor,
 } from '../../game/data/agendas';
 import { MONTH_SHORT } from '../../game/selectors';
+import { EVENT_MODE_LABELS, type EventDecisionMode } from '../../game/storage';
 import { computeScore, scoreTitle, victoryProgress } from '../../game/engine/scoring';
 import { agendaMet, agendaProgress } from '../../game/engine/agenda';
 import { useGameStore } from '../../store/gameStore';
@@ -343,7 +344,17 @@ function AgendaSection({ game }: { game: GameState }) {
 
 /* ============================== Preferences ============================= */
 
-const PREFERENCE_ROWS: { key: 'showNextMove' | 'showTutorial' | 'confirmRisky' | 'reduceMotion' | 'autosaveToCloud'; label: string; hint: string }[] = [
+type ToggleKey =
+  | 'showNextMove'
+  | 'showTutorial'
+  | 'showInspector'
+  | 'confirmRisky'
+  | 'compactNumbers'
+  | 'mobileNav'
+  | 'reduceMotion'
+  | 'autosaveToCloud';
+
+const PREFERENCE_ROWS: { key: ToggleKey; label: string; hint: string }[] = [
   {
     key: 'showNextMove',
     label: 'Next-move strip',
@@ -355,9 +366,24 @@ const PREFERENCE_ROWS: { key: 'showNextMove' | 'showTutorial' | 'confirmRisky' |
     hint: 'Shows the full advisory board in the Situation Room.',
   },
   {
+    key: 'showInspector',
+    label: 'Show "why is this number?"',
+    hint: 'Puts a question mark beside every headline index that opens the engine\'s own arithmetic for it.',
+  },
+  {
     key: 'confirmRisky',
     label: 'Confirm irreversible actions',
-    hint: 'Asks before declaring war, repealing legislation or breaking a contract.',
+    hint: 'Asks before declaring war, repealing legislation or breaking an agreement.',
+  },
+  {
+    key: 'compactNumbers',
+    label: 'Compact figures',
+    hint: 'Shows $1.24T rather than $1,240,000M. Turn it off to read exact numbers.',
+  },
+  {
+    key: 'mobileNav',
+    label: 'Bottom navigation on small screens',
+    hint: 'Puts the four most-used ministries and the advance button under your thumb.',
   },
   {
     key: 'reduceMotion',
@@ -378,14 +404,60 @@ function PreferencesCard() {
 
   return (
     <Card title="Preferences" subtitle="Stored on this device, not in the save" icon="⚙️">
-      <div className="space-y-2">
+      {/*
+        The decision-presentation setting is the one preference that changes
+        how the game is played rather than how it looks, so it sits above the
+        toggles with room to explain what each option actually does.
+      */}
+      <div className="mb-5">
+        <p className="text-xs font-semibold text-white">When a situation needs a decision</p>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+          A dialogue that stops the game is right for a constitutional crisis and wrong for the ninth routine customs
+          dispute of the year. Anything your cabinet settles is still written into the chronicle and announced.
+        </p>
+        <div className="mt-2.5 space-y-1.5">
+          {(Object.keys(EVENT_MODE_LABELS) as EventDecisionMode[]).map((mode) => {
+            const meta = EVENT_MODE_LABELS[mode];
+            const active = prefs.eventMode === mode;
+            return (
+              <button
+                key={mode}
+                onClick={() => setPref('eventMode', mode)}
+                className={clsx(
+                  'focus-ring flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition',
+                  active
+                    ? 'border-gold-500/45 bg-gold-500/[0.07]'
+                    : 'border-white/[0.08] bg-white/[0.02] hover:border-white/20',
+                )}
+                role="radio"
+                aria-checked={active}
+              >
+                <span
+                  className={clsx(
+                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition',
+                    active ? 'border-gold-400' : 'border-white/25',
+                  )}
+                >
+                  {active && <span className="block h-2 w-2 rounded-full bg-gold-400" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-medium text-white">{meta.label}</span>
+                  <span className="block text-[11px] leading-relaxed text-slate-500">{meta.hint}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="space-y-2 border-t border-white/[0.07] pt-4">
         {PREFERENCE_ROWS.map((row) => {
           const on = Boolean(prefs[row.key]);
           return (
             <button
               key={row.key}
               onClick={() => setPref(row.key, !on)}
-              className="focus-ring flex w-full items-start gap-3 rounded-lg px-2 py-2 text-left transition hover:bg-white/[0.03]"
+              className="focus-ring flex w-full items-start gap-3 rounded-lg px-2 py-2.5 text-left transition hover:bg-white/[0.03]"
               role="switch"
               aria-checked={on}
             >

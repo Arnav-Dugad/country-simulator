@@ -32,6 +32,8 @@ import {
   stopResearch,
 } from './research';
 import { assessLegislation, basePoliticalCost, nudgeFactions, spendCapital } from './politics';
+import { dissolveCoalition, formCoalition } from './coalition';
+import { addGrievance, settleTradeDispute } from './tradewar';
 
 export interface ActionResult {
   ok: boolean;
@@ -547,6 +549,10 @@ export function toggleSanctions(s: GameState, countryId: string): ActionResult {
   if (nation.sanctioned) {
     nation.relations = clamp(nation.relations - 30, -100, 100);
     nation.trust = clamp(nation.trust - 25, 0, 100);
+    // Sanctions are a commercial injury as well as a diplomatic one, and the
+    // grievance outlives the sanction — which is why lifting them is not a
+    // reset button.
+    addGrievance(s, countryId, 40);
     push(s, { text: `Sanctions imposed on ${nation.name}.`, category: 'diplomacy', tone: 'bad', icon: '🚫' });
     return ok(`Sanctions imposed on ${nation.name}.`);
   }
@@ -636,6 +642,7 @@ export function cancelTradeAgreement(s: GameState, agreementId: string): ActionR
   if (nation) {
     nation.relations = clamp(nation.relations - 12, -100, 100);
     nation.trust = clamp(nation.trust - 15, 0, 100);
+    addGrievance(s, nation.id, 18);
   }
 
   push(s, {
@@ -1063,6 +1070,38 @@ export function enactDecree(s: GameState, decreeId: string): ActionResult {
     icon: decree.icon,
   });
   return ok(decree.outcome);
+}
+
+/* ------------------------------------------------------------------ */
+/* Coalitions                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Brings a rival party into government in exchange for a concession.
+ *
+ * The concession does not have to be in place yet — the deal is that you will
+ * deliver it, and the partner gives you a grace period to do so. That is what
+ * makes political capital a bargaining chip rather than only a cost.
+ */
+export function openCoalition(s: GameState, partyId: string): ActionResult {
+  const outcome = formCoalition(s, partyId, (entry) => push(s, entry));
+  return outcome.ok ? ok(outcome.message) : fail(outcome.message);
+}
+
+/** Ends a coalition from your side, at a real cost to standing. */
+export function endCoalition(s: GameState, partyId: string): ActionResult {
+  const outcome = dissolveCoalition(s, partyId, (entry) => push(s, entry));
+  return outcome.ok ? ok(outcome.message) : fail(outcome.message);
+}
+
+/* ------------------------------------------------------------------ */
+/* Trade disputes                                                      */
+/* ------------------------------------------------------------------ */
+
+/** Negotiates away a counter-tariff. Does nothing about what caused it. */
+export function settleTrade(s: GameState, countryId: string): ActionResult {
+  const outcome = settleTradeDispute(s, countryId, (entry) => push(s, entry));
+  return outcome.ok ? ok(outcome.message) : fail(outcome.message);
 }
 
 /* ------------------------------------------------------------------ */

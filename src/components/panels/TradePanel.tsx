@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight, Ban, Handshake, Ship, X } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Ban, Handshake, Ship, TrendingDown, X } from 'lucide-react';
 import clsx from 'clsx';
 import type { GameState, ResourceId, TradeAgreement } from '../../game/types';
 import { RESOURCES, RESOURCE_INDEX } from '../../game/data/definitions';
@@ -8,6 +8,11 @@ import { agreementFlow, formatMoney, tradeAgreementBalance } from '../../game/se
 import {
   TRADE_TERMS, availableQuantity, quotedPrice, tradeEligibility, type TradeTerm,
 } from '../../game/engine/trade';
+import {
+  RETALIATION_THRESHOLD, TOLERATED_TARIFF, assessSettlement, averageForeignTariff,
+  foreignTariffDrag, retaliatingNations, tradeExposure,
+} from '../../game/engine/tradewar';
+import { explainCompetitiveness, explainContext } from '../../game/engine/explain';
 import { useGameStore } from '../../store/gameStore';
 import {
   Badge, Button, Card, EmptyState, Meter, Modal, Reveal, Slider, Stat, Tabs, Tooltip, meterColor,
@@ -15,18 +20,20 @@ import {
 import { Flag } from '../ui/Flag';
 
 export function TradePanel({ game }: { game: GameState }) {
-  const [tab, setTab] = useState<'balance' | 'agreements' | 'partners'>('balance');
+  const [tab, setTab] = useState<'balance' | 'agreements' | 'partners' | 'disputes'>('balance');
   const [negotiating, setNegotiating] = useState<{ resource: ResourceId; direction: 'import' | 'export' } | null>(null);
   const symbol = game.identity.currency.symbol;
 
   const contracted = useMemo(() => tradeAgreementBalance(game), [game]);
   const live = game.tradeAgreements.filter((a) => !a.suspended).length;
   const suspended = game.tradeAgreements.filter((a) => a.suspended).length;
+  const retaliators = useMemo(() => retaliatingNations(game), [game]);
+  const foreignTariff = useMemo(() => averageForeignTariff(game), [game]);
 
   return (
     <div className="space-y-5">
       <Reveal>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <Stat label="Agreements" value={game.tradeAgreements.length} hint={`${live} active`} accent="#3ddbd9" icon={<Handshake size={14} />} />
           <Stat
             label="Contracted flow"
@@ -35,9 +42,35 @@ export function TradePanel({ game }: { game: GameState }) {
             accent={contracted >= 0 ? '#7ee787' : '#ff5c6c'}
           />
           <Stat label="Suspended" value={suspended} hint={suspended > 0 ? 'War or sanctions' : 'None'} accent="#ffb648" />
+          <Stat
+            label="Tariffs against us"
+            value={`${foreignTariff.toFixed(1)}%`}
+            hint={retaliators.length > 0 ? `${retaliators.length} nation${retaliators.length === 1 ? '' : 's'} retaliating` : 'Nobody is retaliating'}
+            accent={foreignTariff > 1 ? '#ff5c6c' : '#7ee787'}
+          />
           <Stat label="Trade balance" value={formatMoney(game.economy.tradeBalance, symbol)} accent="#f5d073" />
         </div>
       </Reveal>
+
+      {retaliators.length > 0 && (
+        <Reveal delay={0.02}>
+          <div className="rounded-xl border border-aurora-red/30 bg-aurora-red/[0.07] p-4">
+            <p className="flex items-center gap-2 text-xs font-semibold text-aurora-red">
+              <TrendingDown size={13} /> Trade war — {retaliators.length} nation
+              {retaliators.length === 1 ? '' : 's'} tariffing our exports
+            </p>
+            <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+              Our own rate is {game.taxes.tariff.toFixed(0)}%. The answer is an average {foreignTariff.toFixed(1)}% wall
+              on the way out, which cuts our export competitiveness by{' '}
+              <span className="num font-semibold text-aurora-red">
+                {((1 - foreignTariffDrag(game)) * 100).toFixed(1)}%
+              </span>{' '}
+              and reduces the volume we do with the partners imposing it. Open the{' '}
+              <span className="font-semibold text-white">Disputes</span> tab to see who and why.
+            </p>
+          </div>
+        </Reveal>
+      )}
 
       {suspended > 0 && (
         <Reveal delay={0.02}>
@@ -60,6 +93,7 @@ export function TradePanel({ game }: { game: GameState }) {
           tabs={[
             { id: 'balance' as const, label: 'Commodity balance', count: RESOURCES.length },
             { id: 'agreements' as const, label: 'Agreements', count: game.tradeAgreements.length },
+            { id: 'disputes' as const, label: 'Disputes', count: retaliators.length },
             { id: 'partners' as const, label: 'Partners', count: game.nations.length },
           ]}
         />
@@ -67,6 +101,7 @@ export function TradePanel({ game }: { game: GameState }) {
 
       {tab === 'balance' && <BalanceTab game={game} onNegotiate={setNegotiating} />}
       {tab === 'agreements' && <AgreementsTab game={game} />}
+      {tab === 'disputes' && <DisputesTab game={game} />}
       {tab === 'partners' && <PartnersTab game={game} />}
 
       {negotiating && (
@@ -76,6 +111,174 @@ export function TradePanel({ game }: { game: GameState }) {
           direction={negotiating.direction}
           onClose={() => setNegotiating(null)}
         />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Disputes                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Who is angry about our trade policy, how angry, and what can be done.
+ *
+ * The point of the tab is that the tariff slider is not a free revenue dial.
+ * Every nation carries a grievance built from our rate weighted by how exposed
+ * their exporters are to us, and past a threshold they answer in kind. There
+ * are exactly two ways out and both are shown: cut the rate, which bleeds the
+ * grievance away over a year or two, or buy a settlement, which lifts their
+ * tariff at once and does nothing about the cause.
+ */
+function DisputesTab({ game }: { game: GameState }) {
+  const { settleTrade, setTax } = useGameStore();
+  const ctx = useMemo(() => explainContext(game), [game]);
+  const competitiveness = useMemo(() => explainCompetitiveness(game, ctx), [game, ctx]);
+
+  const ranked = useMemo(
+    () =>
+      [...game.nations]
+        .filter((n) => (n.tradeGrievance ?? 0) > 6 || (n.tariffOnPlayer ?? 0) > 0)
+        .sort(
+          (a, b) =>
+            (b.tariffOnPlayer ?? 0) * 100 + (b.tradeGrievance ?? 0) -
+            ((a.tariffOnPlayer ?? 0) * 100 + (a.tradeGrievance ?? 0)),
+        ),
+    [game.nations],
+  );
+
+  return (
+    <div className="space-y-4">
+      <Card title="Export competitiveness" subtitle="Every factor, multiplied" icon="⚖️">
+        <ul className="space-y-2">
+          {competitiveness.map((t) => (
+            <li key={t.label}>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-xs text-slate-300">{t.label}</span>
+                <span
+                  className={clsx(
+                    'num shrink-0 text-xs font-semibold',
+                    t.value >= 1 ? 'text-aurora-lime' : 'text-aurora-red',
+                  )}
+                >
+                  ×{t.value.toFixed(3)}
+                </span>
+              </div>
+              {t.hint && <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">{t.hint}</p>}
+            </li>
+          ))}
+        </ul>
+        <div className="mt-3 flex items-baseline justify-between border-t border-white/10 pt-2">
+          <span className="text-xs font-semibold text-white">Product</span>
+          <span className="num text-xs font-bold text-white">
+            ×{competitiveness.reduce((acc, t) => acc * t.value, 1).toFixed(3)}
+          </span>
+        </div>
+        <p className="mt-2 text-[10.5px] leading-relaxed text-slate-500">
+          Anything above 1.00 is a trade surplus and anything below it a deficit, scaled by total volume. Your own
+          tariff appears twice: once directly, because it raises input costs for your exporters, and once through
+          whatever it provokes.
+        </p>
+
+        {game.taxes.tariff > TOLERATED_TARIFF && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-2.5">
+            <span className="flex-1 text-[11px] leading-relaxed text-slate-400">
+              Our tariff is <span className="num font-semibold text-white">{game.taxes.tariff.toFixed(0)}%</span>.
+              Anything above {TOLERATED_TARIFF}% builds a grievance abroad.
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setTax('tariff', Math.max(0, game.taxes.tariff - 5))}
+            >
+              Cut to {Math.max(0, game.taxes.tariff - 5).toFixed(0)}%
+            </Button>
+          </div>
+        )}
+      </Card>
+
+      {ranked.length === 0 ? (
+        <EmptyState
+          icon="🕊️"
+          title="No trade disputes"
+          body={`Nobody has a standing grievance about our trade policy. A tariff above ${TOLERATED_TARIFF}% starts building one, faster with the partners whose exporters depend on us most.`}
+        />
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          {ranked.map((nation) => {
+            const settlement = assessSettlement(game, nation.id);
+            const exposure = tradeExposure(nation) * 100;
+            const retaliating = (nation.tariffOnPlayer ?? 0) > 0.5;
+            return (
+              <Card
+                key={nation.id}
+                className={retaliating ? 'border-aurora-red/30' : undefined}
+                title={
+                  <span className="flex items-center gap-2">
+                    <Flag iso2={nation.iso2} width={40} className="h-4 w-6 shrink-0" />
+                    {nation.name}
+                  </span>
+                }
+                subtitle={REGION_LABELS[nation.region]}
+                action={
+                  retaliating ? (
+                    <Badge tone="bad">{nation.tariffOnPlayer.toFixed(0)}% tariff</Badge>
+                  ) : (
+                    <Badge tone="warn">Building</Badge>
+                  )
+                }
+              >
+                <div className="space-y-2.5">
+                  <div>
+                    <div className="mb-1 flex items-baseline justify-between">
+                      <span className="text-[11px] text-slate-400">Grievance</span>
+                      <span
+                        className="num text-[11px] font-semibold"
+                        style={{ color: meterColor(nation.tradeGrievance, true) }}
+                      >
+                        {nation.tradeGrievance.toFixed(0)} / {RETALIATION_THRESHOLD} to retaliate
+                      </span>
+                    </div>
+                    <div className="relative">
+                      <Meter value={nation.tradeGrievance} inverted height={4} />
+                      <span
+                        className="absolute inset-y-0 w-px bg-white/50"
+                        style={{ left: `${RETALIATION_THRESHOLD}%` }}
+                        aria-hidden
+                      />
+                    </div>
+                  </div>
+
+                  <p className="text-[10.5px] leading-relaxed text-slate-500">
+                    Their exporters are <span className="num font-semibold text-slate-300">{exposure.toFixed(0)}%</span>{' '}
+                    dependent on us, and they are{' '}
+                    <span className="font-semibold text-slate-300">{nation.personality}</span> — which is why they react
+                    the way they do.
+                    {nation.sanctioned && ' Our sanctions on them are the largest single term here.'}
+                  </p>
+
+                  <Tooltip
+                    label={
+                      settlement.enabled
+                        ? 'A settlement lifts their tariff at once and clears most of the grievance. It does nothing about the rate that caused it.'
+                        : settlement.reason ?? ''
+                    }
+                  >
+                    <Button
+                      size="sm"
+                      full
+                      variant={settlement.enabled ? 'primary' : 'secondary'}
+                      disabled={!settlement.enabled}
+                      onClick={() => settleTrade(nation.id)}
+                    >
+                      {settlement.enabled ? `Settle for ${settlement.cost} capital` : settlement.reason}
+                    </Button>
+                  </Tooltip>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
       )}
     </div>
   );

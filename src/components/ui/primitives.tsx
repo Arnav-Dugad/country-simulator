@@ -346,7 +346,11 @@ export function Modal({
             role="dialog"
             aria-modal="true"
             className={clsx(
-              'glass-strong relative flex max-h-[92vh] w-full flex-col rounded-b-none sm:rounded-2xl',
+              // On a phone this is a bottom sheet: full width, rounded only at
+              // the top, and never taller than the visible viewport once the
+              // browser chrome and the home indicator are accounted for.
+              'glass-strong relative flex w-full flex-col rounded-b-none',
+              'max-h-[88dvh] pb-[env(safe-area-inset-bottom)] sm:max-h-[92vh] sm:rounded-2xl sm:pb-0',
               widths[size],
             )}
             initial={{ opacity: 0, y: 28, scale: 0.97 }}
@@ -354,16 +358,21 @@ export function Modal({
             exit={{ opacity: 0, y: 18, scale: 0.98 }}
             transition={{ type: 'spring', stiffness: 260, damping: 26 }}
           >
+            {/* Grab handle — the affordance that says "this is a sheet". */}
+            <span
+              className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-white/20 sm:hidden"
+              aria-hidden
+            />
             {(title || dismissable) && (
-              <header className="flex items-start justify-between gap-4 border-b border-white/10 px-6 py-5">
+              <header className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-6 sm:py-5">
                 <div className="min-w-0">
-                  {title && <h2 className="text-lg font-bold text-white">{title}</h2>}
-                  {subtitle && <p className="mt-1 text-sm text-slate-400">{subtitle}</p>}
+                  {title && <h2 className="text-base font-bold text-white sm:text-lg">{title}</h2>}
+                  {subtitle && <p className="mt-1 text-xs text-slate-400 sm:text-sm">{subtitle}</p>}
                 </div>
                 {dismissable && (
                   <button
                     onClick={onClose}
-                    className="focus-ring -mr-1 -mt-1 rounded-lg p-2 text-slate-400 transition hover:bg-white/10 hover:text-white"
+                    className="focus-ring -mr-1 -mt-1 rounded-lg p-2.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
                     aria-label="Close"
                   >
                     <X size={18} />
@@ -371,8 +380,12 @@ export function Modal({
                 )}
               </header>
             )}
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>
-            {footer && <footer className="border-t border-white/10 px-6 py-4">{footer}</footer>}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 sm:px-6 sm:py-5">
+              {children}
+            </div>
+            {footer && (
+              <footer className="border-t border-white/10 px-5 py-3.5 sm:px-6 sm:py-4">{footer}</footer>
+            )}
           </motion.div>
         </motion.div>
       )}
@@ -414,15 +427,64 @@ export function Badge({
   );
 }
 
+/**
+ * Hover tooltip that also works on touch.
+ *
+ * A pointer-only tooltip hides a third of this game's explanatory text from
+ * anyone on a phone, which is most people. On a touch device a long-press
+ * opens it and a tap anywhere else closes it; the pointer path is unchanged,
+ * so nothing regresses on a desktop.
+ */
 export function Tooltip({ label, children }: { label: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const holdRef = useRef<ReturnType<typeof setTimeout>>();
+  const rootRef = useRef<HTMLSpanElement>(null);
+
+  // A pinned tooltip closes on the next touch anywhere outside it.
+  useEffect(() => {
+    if (!pinned) return;
+    const onAway = (e: Event) => {
+      if (!rootRef.current?.contains(e.target as Node)) {
+        setPinned(false);
+        setOpen(false);
+      }
+    };
+    // Deferred so the touch that opened it does not immediately close it.
+    const id = setTimeout(() => {
+      document.addEventListener('pointerdown', onAway);
+    }, 0);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener('pointerdown', onAway);
+    };
+  }, [pinned]);
+
+  const cancelHold = () => {
+    if (holdRef.current) clearTimeout(holdRef.current);
+    holdRef.current = undefined;
+  };
+
+  useEffect(() => cancelHold, []);
+
   return (
     <span
+      ref={rootRef}
       className="relative inline-flex"
       onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onMouseLeave={() => !pinned && setOpen(false)}
       onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
+      onBlur={() => !pinned && setOpen(false)}
+      onTouchStart={() => {
+        cancelHold();
+        holdRef.current = setTimeout(() => {
+          setOpen(true);
+          setPinned(true);
+        }, 380);
+      }}
+      onTouchEnd={cancelHold}
+      onTouchMove={cancelHold}
+      onTouchCancel={cancelHold}
     >
       {children}
       <AnimatePresence>
@@ -432,13 +494,91 @@ export function Tooltip({ label, children }: { label: ReactNode; children: React
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 4 }}
             transition={{ duration: 0.13 }}
-            className="glass-strong pointer-events-none absolute bottom-full left-1/2 z-40 mb-2 w-max max-w-[16rem] -translate-x-1/2 rounded-lg px-3 py-2 text-xs leading-relaxed text-slate-200"
+            role="tooltip"
+            className="glass-strong pointer-events-none absolute bottom-full left-1/2 z-40 mb-2 w-max max-w-[min(16rem,70vw)] -translate-x-1/2 rounded-lg px-3 py-2 text-xs leading-relaxed text-slate-200"
           >
             {label}
           </motion.span>
         )}
       </AnimatePresence>
     </span>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Confirmation                                                        */
+/* ------------------------------------------------------------------ */
+
+export interface ConfirmRequest {
+  title: string;
+  body: ReactNode;
+  /** Label on the confirming button. */
+  confirmLabel: string;
+  /** Styles the confirm button as destructive. */
+  danger?: boolean;
+}
+
+/**
+ * A button that asks first.
+ *
+ * Used for anything the player cannot take back — declaring war, repealing
+ * legislation a coalition partner is holding you to, tearing up a contract.
+ * Honours the "confirm irreversible actions" preference, so a player who finds
+ * it tedious can turn it off and the button becomes an ordinary one.
+ */
+export function ConfirmButton({
+  confirm,
+  onConfirm,
+  needsConfirmation = true,
+  children,
+  ...buttonProps
+}: ButtonProps & {
+  confirm: ConfirmRequest;
+  onConfirm: () => void;
+  /** Set false to skip the dialogue entirely (e.g. preference turned off). */
+  needsConfirmation?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Button
+        {...buttonProps}
+        onClick={() => {
+          if (needsConfirmation) setOpen(true);
+          else onConfirm();
+        }}
+      >
+        {children}
+      </Button>
+
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        size="sm"
+        title={confirm.title}
+        footer={
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button variant="ghost" full onClick={() => setOpen(false)} className="sm:w-auto">
+              Cancel
+            </Button>
+            <Button
+              variant={confirm.danger ? 'danger' : 'primary'}
+              full
+              className="sm:w-auto"
+              onClick={() => {
+                setOpen(false);
+                onConfirm();
+              }}
+            >
+              {confirm.confirmLabel}
+            </Button>
+          </div>
+        }
+      >
+        <div className="text-sm leading-relaxed text-slate-300">{confirm.body}</div>
+      </Modal>
+    </>
   );
 }
 

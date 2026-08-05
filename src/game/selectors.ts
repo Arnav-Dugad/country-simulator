@@ -520,36 +520,16 @@ export const ENERGY_COLORS: Record<EnergySource, string> = {
 /* Formatting                                                          */
 /* ------------------------------------------------------------------ */
 
-export function formatMoney(millions: number, currencySymbol = '$'): string {
-  const abs = Math.abs(millions);
-  const sign = millions < 0 ? '-' : '';
-  if (abs >= 1e6) return `${sign}${currencySymbol}${(abs / 1e6).toFixed(2)}T`;
-  if (abs >= 1e3) return `${sign}${currencySymbol}${(abs / 1e3).toFixed(1)}B`;
-  return `${sign}${currencySymbol}${abs.toFixed(0)}M`;
-}
-
-export function formatBillions(billions: number, currencySymbol = '$'): string {
-  const abs = Math.abs(billions);
-  const sign = billions < 0 ? '-' : '';
-  if (abs >= 1000) return `${sign}${currencySymbol}${(abs / 1000).toFixed(2)}T`;
-  return `${sign}${currencySymbol}${abs.toFixed(1)}B`;
-}
-
-export function formatPopulation(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return n.toFixed(0);
-}
-
-export function formatNumber(n: number, digits = 0): string {
-  return n.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
-}
-
-export function formatPercent(n: number, digits = 1): string {
-  return `${n >= 0 ? '' : ''}${n.toFixed(digits)}%`;
-}
-
-export function formatSigned(n: number, digits = 1, suffix = ''): string {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(digits)}${suffix}`;
-}
+/**
+ * Re-exported from `format` so the ~60 existing call sites keep working while
+ * the formatting layer — the only part of the game with a display preference
+ * behind it — lives in one place of its own.
+ */
+export {
+  formatBillions,
+  formatMoney,
+  formatNumber,
+  formatPercent,
+  formatPopulation,
+  formatSigned,
+} from './format';

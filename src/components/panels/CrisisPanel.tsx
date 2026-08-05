@@ -89,6 +89,14 @@ export function CrisisPanel({ game }: { game: GameState }) {
                     </div>
                     <Meter value={crisis.severity} height={7} inverted />
                     <p className="mt-2 text-xs leading-relaxed text-slate-300">{stage?.description}</p>
+                    {crisis.causedBy && (
+                      <p className="mt-2 rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-2 text-[11px] leading-relaxed text-slate-400">
+                        <span className="font-semibold text-slate-200">
+                          Touched off by {CRISIS_INDEX[crisis.causedBy.defId]?.name ?? 'an earlier crisis'}.
+                        </span>{' '}
+                        {crisis.causedBy.because}
+                      </p>
+                    )}
                   </div>
 
                   {stage && (
@@ -106,6 +114,16 @@ export function CrisisPanel({ game }: { game: GameState }) {
                       If it runs its full course unresolved
                     </p>
                     <EffectChips effects={def.climax} />
+                    {def.chains && def.chains.length > 0 && (
+                      <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                        <span className="font-semibold text-aurora-amber">And it does not end there.</span> A crisis
+                        allowed to run its full course can touch off{' '}
+                        {def.chains
+                          .map((c) => CRISIS_INDEX[c.crisisId]?.name ?? c.crisisId)
+                          .join(' or ')}
+                        . Bringing this one under control is what prevents that — a contained crisis never chains.
+                      </p>
+                    )}
                   </div>
 
                   <div className="space-y-2 border-t border-white/[0.07] pt-3">

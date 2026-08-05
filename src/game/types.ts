@@ -595,6 +595,24 @@ export interface ForeignNation {
   threatPerception: number;
   /** Whether they are currently sanctioning the player. */
   sanctioningPlayer: boolean;
+
+  /**
+   * Tariff, in percent, this nation levies on goods arriving from the player.
+   *
+   * Zero for almost everyone almost always. It rises only when they hold a
+   * standing grievance about the player's own trade policy, which is what
+   * turns the tariff slider from a revenue dial into a decision.
+   */
+  tariffOnPlayer: number;
+  /**
+   * Accumulated commercial anger, 0–100.
+   *
+   * Built by the player's tariffs — weighted by how much this nation actually
+   * trades with them — by sanctions, and by torn-up contracts. It decays once
+   * the cause is removed, which is what makes de-escalation a real option
+   * rather than a one-way ratchet.
+   */
+  tradeGrievance: number;
 }
 
 export type NationAgenda =
@@ -737,6 +755,24 @@ export interface CrisisDef {
   responses: CrisisResponseDef[];
   /** Applied once when the crisis reaches its final stage unresolved. */
   climax: EventEffects;
+  /**
+   * Crises this one can touch off if it is allowed to run its full course.
+   *
+   * A banking collapse that nobody contains really does become a crisis of
+   * legitimacy. Chains only fire at the climax — never on a crisis the player
+   * brought under control — so a chain is always the price of neglect rather
+   * than a random pile-on.
+   */
+  chains?: CrisisChain[];
+}
+
+export interface CrisisChain {
+  /** The crisis definition that may follow. */
+  crisisId: string;
+  /** Probability it follows, 0–1. */
+  chance: number;
+  /** Sentence explaining the causal link, shown in the log and the panel. */
+  because: string;
 }
 
 export interface ActiveCrisis {
@@ -752,6 +788,11 @@ export interface ActiveCrisis {
   severity: number;
   /** Response ids already used, so each is only available once. */
   responsesUsed: string[];
+  /**
+   * Set when this crisis was touched off by another one running its course.
+   * Purely narrative, but it is what lets the panel say *why* this happened.
+   */
+  causedBy?: { defId: string; because: string };
 }
 
 /* ------------------------------------------------------------------ */
@@ -821,6 +862,60 @@ export interface GovernanceState {
   /** Bills passed and blocked, for the chronicle. */
   billsPassed: number;
   billsBlocked: number;
+  /** Standing agreements with rival parties. */
+  coalition: CoalitionPact[];
+  /** Coalitions formed and collapsed over the campaign, for the chronicle. */
+  pactsFormed: number;
+  pactsCollapsed: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Coalitions                                                          */
+/* ------------------------------------------------------------------ */
+
+/** The kind of thing a party will accept in exchange for its votes. */
+export type ConcessionKind = 'policy' | 'budget' | 'tax' | 'devolution' | 'liberties';
+
+/**
+ * What a rival party wants from you.
+ *
+ * Derived from its ideology and the state of the country rather than written
+ * by hand, so the ask is always something the party would plausibly care
+ * about right now — and always something the player can actually go and do.
+ */
+export interface PartyDemand {
+  kind: ConcessionKind;
+  /** Policy id, budget department or tax key, depending on `kind`. */
+  key: string;
+  /** Threshold the concession has to meet, for budget and tax demands. */
+  value?: number;
+  /** True when the demanded value is a ceiling rather than a floor. */
+  atMost?: boolean;
+  /** Short label — "Enact Universal Healthcare". */
+  label: string;
+  /** One sentence of why they want it. */
+  detail: string;
+}
+
+/**
+ * A standing agreement with a rival party: their votes for your concession.
+ *
+ * This is what turns political capital from a cost into a bargaining chip. The
+ * pact holds only while the concession does — stop honouring it and they give
+ * you a grace period, then walk, and the whole legislature notices.
+ */
+export interface CoalitionPact {
+  partyId: string;
+  startedTurn: number;
+  /** Turn the pact lapses unless renewed. */
+  endsTurn: number;
+  demand: PartyDemand;
+  /** True once the concession has stopped being honoured. */
+  breached: boolean;
+  /** Months the breach has run. They walk out after the grace period. */
+  breachMonths: number;
+  /** Capital paid to open the deal, kept for the chronicle. */
+  capitalPaid: number;
 }
 
 /* ------------------------------------------------------------------ */

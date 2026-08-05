@@ -90,6 +90,35 @@ export function clearAutosave(): void {
   }
 }
 
+/**
+ * How situations that need a decision are put in front of the player.
+ *
+ * `modal` is the original behaviour and still the default. Everything else
+ * exists because a pop-up that stops the game dead is the right presentation
+ * for a once-a-decade constitutional crisis and the wrong one for the ninth
+ * routine customs dispute of the year.
+ */
+export type EventDecisionMode = 'modal' | 'inline' | 'delegate-minor' | 'delegate-all';
+
+export const EVENT_MODE_LABELS: Record<EventDecisionMode, { label: string; hint: string }> = {
+  modal: {
+    label: 'Always ask me',
+    hint: 'Every situation opens a dialogue and pauses the campaign until you answer.',
+  },
+  inline: {
+    label: 'Never pop up — show it in the panel',
+    hint: 'No dialogue. The decision waits in a banner at the top of whatever you are looking at. Time still stops until you answer.',
+  },
+  'delegate-minor': {
+    label: 'Cabinet handles routine matters',
+    hint: 'Trivial and minor situations are settled by your ministers and logged. Major and critical ones still come to you.',
+  },
+  'delegate-all': {
+    label: 'Cabinet handles everything',
+    hint: 'No situation ever interrupts you. Every decision is taken on your behalf and recorded in the chronicle.',
+  },
+};
+
 export interface Preferences {
   reduceMotion: boolean;
   showTutorial: boolean;
@@ -102,6 +131,12 @@ export interface Preferences {
   confirmRisky: boolean;
   /** Compact number formatting (1.2T) rather than full figures. */
   compactNumbers: boolean;
+  /** How decisions are presented — see `EventDecisionMode`. */
+  eventMode: EventDecisionMode;
+  /** Show the "why is this number" affordance next to explainable indices. */
+  showInspector: boolean;
+  /** Bottom navigation bar on small screens. */
+  mobileNav: boolean;
 }
 
 const DEFAULT_PREFS: Preferences = {
@@ -112,6 +147,9 @@ const DEFAULT_PREFS: Preferences = {
   showNextMove: true,
   confirmRisky: true,
   compactNumbers: true,
+  eventMode: 'modal',
+  showInspector: true,
+  mobileNav: true,
 };
 
 export function readPreferences(): Preferences {
@@ -173,6 +211,11 @@ export function migrate(state: GameState): GameState {
     upgradeToV5(state);
   }
 
+  // v5 -> v6: coalition governments, crisis chaining and trade retaliation.
+  if (state.version < 6) {
+    upgradeToV6(state);
+  }
+
   // Defensive: a save hand-edited or truncated in transit should still load.
   if (!Array.isArray(state.victoriesAchieved)) state.victoriesAchieved = [];
   if (typeof state.settings.neverEndGame !== 'boolean') state.settings.neverEndGame = false;
@@ -180,12 +223,57 @@ export function migrate(state: GameState): GameState {
     state.decreeCooldowns = {};
   }
   if (!Array.isArray(state.tradeAgreements)) state.tradeAgreements = [];
-  // Run the v5 backfill unconditionally too: it is idempotent, and it repairs
-  // a save that was written by this build but truncated or partially merged.
+  // Run the backfills unconditionally too: both are idempotent, and together
+  // they repair a save written by this build but truncated or partially merged.
   upgradeToV5(state);
+  upgradeToV6(state);
 
   state.version = SCHEMA_VERSION;
   return state;
+}
+
+/**
+ * Fills in everything schema 6 added.
+ *
+ * Like the v5 pass, written to be safe to run twice — each block checks the
+ * field's shape before touching it, so it doubles as a repair pass.
+ */
+function upgradeToV6(state: GameState): void {
+  /* --- Governance gains the coalition ------------------------------------ */
+  const gov = state.governance;
+  if (gov) {
+    if (!Array.isArray(gov.coalition)) gov.coalition = [];
+    // Drop pacts whose party no longer exists, and any missing a demand —
+    // both would crash the coalition update rather than degrade gracefully.
+    gov.coalition = gov.coalition.filter(
+      (pact) =>
+        pact &&
+        typeof pact.partyId === 'string' &&
+        pact.demand !== undefined &&
+        (state.parties ?? []).some((p) => p.id === pact.partyId),
+    );
+    for (const pact of gov.coalition) {
+      if (typeof pact.breached !== 'boolean') pact.breached = false;
+      if (typeof pact.breachMonths !== 'number') pact.breachMonths = 0;
+      if (typeof pact.capitalPaid !== 'number') pact.capitalPaid = 0;
+      if (typeof pact.endsTurn !== 'number') pact.endsTurn = (state.turn ?? 0) + 48;
+      if (typeof pact.startedTurn !== 'number') pact.startedTurn = state.turn ?? 0;
+    }
+    if (typeof gov.pactsFormed !== 'number') gov.pactsFormed = 0;
+    if (typeof gov.pactsCollapsed !== 'number') gov.pactsCollapsed = 0;
+  }
+
+  /* --- Nations gain a trade posture -------------------------------------- */
+  for (const n of state.nations ?? []) {
+    if (typeof n.tariffOnPlayer !== 'number' || !Number.isFinite(n.tariffOnPlayer)) n.tariffOnPlayer = 0;
+    if (typeof n.tradeGrievance !== 'number' || !Number.isFinite(n.tradeGrievance)) {
+      // Derive a plausible starting grievance from the tariff the save was
+      // already running, so a long campaign does not reset the world's
+      // patience to zero the moment it loads.
+      const tariff = state.taxes?.tariff ?? 0;
+      n.tradeGrievance = Math.max(0, Math.min(100, (tariff - 6) * 2.5));
+    }
+  }
 }
 
 /**
@@ -276,6 +364,9 @@ function upgradeToV5(state: GameState): void {
       momentum: 0,
       billsPassed: 0,
       billsBlocked: 0,
+      coalition: [],
+      pactsFormed: 0,
+      pactsCollapsed: 0,
     };
   }
 

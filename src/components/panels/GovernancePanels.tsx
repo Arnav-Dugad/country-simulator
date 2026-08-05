@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip as RTooltip } from 'recharts';
-import { Check, Search, Vote, X } from 'lucide-react';
+import { AlertTriangle, Check, Handshake, Search, Vote, X } from 'lucide-react';
 import clsx from 'clsx';
 import type { GameState, PolicyCategory } from '../../game/types';
 import { POLICIES, POLICY_CATEGORIES, POLICY_CATEGORY_LABELS, POLICY_INDEX } from '../../game/data/policies';
@@ -8,10 +8,21 @@ import { ADVISORS, MAX_ADVISORS } from '../../game/data/institutions';
 import { GOVERNMENT_INDEX, IDEOLOGY_INDEX } from '../../game/data/definitions';
 import { formatMoney, formatPopulation } from '../../game/selectors';
 import { policyAvailability } from '../../game/engine/actions';
+import {
+  BREACH_GRACE_MONTHS,
+  MAX_COALITION_PARTNERS,
+  assessPact,
+  coalitionDiscount,
+  coalitionShare,
+  demandSatisfied,
+  ownPartyId,
+} from '../../game/engine/coalition';
 import { useGameStore } from '../../store/gameStore';
-import { Badge, Button, Card, EmptyState, Meter, Reveal, Slider, Stat, Tabs, Tooltip, meterColor } from '../ui/primitives';
+import { useUiStore } from '../../store/uiStore';
+import { Badge, Button, Card, ConfirmButton, EmptyState, Meter, Reveal, Slider, Stat, Tabs, Tooltip, meterColor } from '../ui/primitives';
 import { ModifierList } from './ModifierList';
 import { AdvisoryBoard } from './AdvisoryBoard';
+import { Inspect } from '../game/Inspector';
 import { chartTooltip } from './chartHelpers';
 
 /* ================================ Policies ============================== */
@@ -198,13 +209,21 @@ export function PoliticsPanel({ game }: { game: GameState }) {
             value={Math.floor(game.governance.capital)}
             hint={`${game.governance.capitalPerMonth >= 0 ? '+' : ''}${game.governance.capitalPerMonth.toFixed(1)}/mo · cap ${Math.round(game.governance.capitalCap)}`}
             accent="#9d6bff"
+            icon={<Inspect game={game} id="capitalIncome" label="political capital income" />}
           />
-          <Stat label="Mandate" value={game.governance.mandate.toFixed(0)} hint="How legitimate you are seen to be" accent="#4f8cff" />
+          <Stat
+            label="Mandate"
+            value={game.governance.mandate.toFixed(0)}
+            hint="How legitimate you are seen to be"
+            accent="#4f8cff"
+            icon={<Inspect game={game} id="mandate" label="mandate" />}
+          />
           <Stat
             label="Legislative support"
             value={`${game.governance.legislativeSupport.toFixed(0)}%`}
             hint={`${game.governance.billsPassed} bills passed`}
             accent="#7ee787"
+            icon={<Inspect game={game} id="legislativeSupport" label="legislative support" />}
           />
           <Stat
             label={gov.holdsElections ? 'Next election' : 'Government'}
@@ -213,6 +232,10 @@ export function PoliticsPanel({ game }: { game: GameState }) {
             accent="#f5d073"
           />
         </div>
+      </Reveal>
+
+      <Reveal delay={0.02}>
+        <CoalitionCard game={game} />
       </Reveal>
 
       <Reveal delay={0.03}>
@@ -413,6 +436,204 @@ export function PoliticsPanel({ game }: { game: GameState }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* =============================== Coalition ============================== */
+
+/**
+ * The floor of the house.
+ *
+ * Political capital is a cost everywhere else in the game. Here it is a
+ * bargaining chip: pay a rival party's price and their seats vote with you,
+ * which takes the price off every bill after it. The concession is a standing
+ * commitment, so the card's real job is showing whether each bargain is still
+ * being kept and how long you have if it is not.
+ */
+function CoalitionCard({ game }: { game: GameState }) {
+  const { openCoalition, endCoalition } = useGameStore();
+  const confirmRisky = useUiStore((s) => s.prefs.confirmRisky);
+  const gov = GOVERNMENT_INDEX[game.identity.government];
+
+  const share = coalitionShare(game);
+  const discount = coalitionDiscount(game);
+  const own = ownPartyId(game);
+  const partners = game.governance.coalition;
+  const rivals = game.parties.filter((p) => p.id !== own && !partners.some((c) => c.partyId === p.id));
+
+  if (!gov.holdsElections) {
+    return (
+      <Card title="The floor of the house" subtitle="No legislature to bargain with" icon={<Handshake size={16} />}>
+        <p className="text-xs leading-relaxed text-slate-400">
+          {gov.name} does not answer to a chamber, so there are no votes to buy. What has to be carried instead is the
+          apparatus of state — the interest groups who staff it and the officers who guarantee it. That is what the{' '}
+          <span className="font-semibold text-slate-200">Interest Groups</span> panel is for.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      title="The floor of the house"
+      subtitle="Their votes for your concession"
+      icon={<Handshake size={16} />}
+      action={
+        <Badge tone={share > 50 ? 'good' : share > 40 ? 'warn' : 'bad'}>
+          {share.toFixed(0)}% of the chamber
+        </Badge>
+      }
+    >
+      <div className="space-y-1.5">
+        <div className="flex items-baseline justify-between text-[11px]">
+          <span className="text-slate-400">Government bloc</span>
+          <span className="num font-semibold text-white">{share.toFixed(1)}%</span>
+        </div>
+        <div className="relative">
+          <Meter value={share} height={7} />
+          {/* The line that matters: a majority is what changes the arithmetic. */}
+          <span className="absolute inset-y-0 left-1/2 w-px bg-white/45" aria-hidden />
+        </div>
+        <p className="text-[10.5px] leading-relaxed text-slate-500">
+          {share > 50 ? (
+            <>
+              A working majority. Legislation costs{' '}
+              <span className="num font-semibold text-aurora-lime">{((1 - discount) * 100).toFixed(0)}% less</span> than
+              it would without the coalition.
+            </>
+          ) : (
+            <>
+              Short of the 50% line, so every bill is still bought vote by vote. One more partner would change that.
+            </>
+          )}
+        </p>
+      </div>
+
+      {partners.length > 0 && (
+        <div className="mt-4 space-y-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">In government with you</p>
+          {partners.map((pact) => {
+            const party = game.parties.find((p) => p.id === pact.partyId);
+            const honoured = demandSatisfied(game, pact.demand);
+            const grace = Math.max(0, BREACH_GRACE_MONTHS - pact.breachMonths + 1);
+            const monthsLeft = Math.max(0, pact.endsTurn - game.turn);
+            return (
+              <div
+                key={pact.partyId}
+                className={clsx(
+                  'rounded-xl border p-3',
+                  honoured ? 'border-aurora-lime/25 bg-aurora-lime/[0.04]' : 'border-aurora-red/35 bg-aurora-red/[0.05]',
+                )}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: party?.color }} />
+                    <span className="truncate text-xs font-semibold text-white">{party?.name ?? pact.partyId}</span>
+                    <span className="num shrink-0 text-[10px] text-slate-500">{party?.seats ?? 0} seats</span>
+                  </span>
+                  {honoured ? (
+                    <Badge tone="good">Honoured</Badge>
+                  ) : (
+                    <Badge tone="bad">
+                      <AlertTriangle size={9} /> {grace} month{grace === 1 ? '' : 's'} to fix
+                    </Badge>
+                  )}
+                </div>
+
+                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-300">
+                  <span className="font-semibold">Their price:</span> {pact.demand.label}
+                </p>
+                <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">{pact.demand.detail}</p>
+                <p className="mt-1.5 text-[10.5px] text-slate-500">
+                  Agreement runs {monthsLeft} more month{monthsLeft === 1 ? '' : 's'} · cost {pact.capitalPaid} capital
+                </p>
+
+                <ConfirmButton
+                  size="sm"
+                  variant="ghost"
+                  full
+                  className="mt-2"
+                  needsConfirmation={confirmRisky}
+                  confirm={{
+                    title: `Dismiss ${party?.name ?? 'this partner'}?`,
+                    danger: true,
+                    confirmLabel: 'Break the agreement',
+                    body: (
+                      <>
+                        Ending the agreement costs you their votes, a further hit to relations with them, and standing
+                        with the chamber. You will not get the {pact.capitalPaid} political capital back, and they will
+                        be dearer to bring back in later.
+                      </>
+                    ),
+                  }}
+                  onConfirm={() => endCoalition(pact.partyId)}
+                >
+                  Dismiss from government
+                </ConfirmButton>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-4 space-y-2">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+          {partners.length >= MAX_COALITION_PARTNERS ? 'Not available — the government already holds three partners' : 'Open negotiations'}
+        </p>
+        {rivals.length === 0 && (
+          <p className="text-[11px] text-slate-500">Every other party is already in government with you.</p>
+        )}
+        {rivals.map((party) => {
+          const pact = assessPact(game, party.id);
+          return (
+            <div key={party.id} className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: party.color }} />
+                  <span className="truncate text-xs font-semibold text-white">{party.name}</span>
+                  <span className="num shrink-0 text-[10px] text-slate-500">
+                    {party.support.toFixed(0)}% · {party.seats} seats
+                  </span>
+                </span>
+                <Tooltip label="Political capital to open the deal. Larger parties, colder relations and greater ideological distance all raise it — and so does needing them.">
+                  <span className="num text-[11px] font-semibold text-aurora-violet">{pact.cost} capital</span>
+                </Tooltip>
+              </div>
+
+              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-300">
+                <span className="font-semibold">They want:</span> {pact.demand.label}
+                {pact.alreadyMet && <Badge tone="good" className="ml-2">Already done</Badge>}
+              </p>
+              <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">{pact.demand.detail}</p>
+              <p className="mt-1 text-[10.5px] text-slate-500">
+                Worth about{' '}
+                <span className="num font-semibold text-aurora-lime">+{pact.supportGain.toFixed(1)}</span> points of
+                legislative support, for 48 months.
+              </p>
+
+              <Button
+                size="sm"
+                variant={pact.enabled ? 'primary' : 'secondary'}
+                full
+                className="mt-2"
+                disabled={!pact.enabled}
+                title={pact.reason ?? undefined}
+                onClick={() => openCoalition(party.id)}
+              >
+                {pact.enabled ? `Bring ${party.name} into government` : pact.reason}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="mt-3 border-t border-white/[0.07] pt-3 text-[10.5px] leading-relaxed text-slate-500">
+        A partner's concession is a standing commitment, not a one-off purchase. Stop honouring it and they give you{' '}
+        {BREACH_GRACE_MONTHS} months, then walk — and walking out costs far more than the concession ever would have.
+        They also take a little credit while they sit with you, so a permanent coalition slowly transfers votes from
+        your party to theirs.
+      </p>
+    </Card>
   );
 }
 

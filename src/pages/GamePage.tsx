@@ -36,10 +36,27 @@ export function GamePage() {
       </GameShell>
 
       <CloudAutosave game={game} />
-      {game.eventQueue.length > 0 && !game.gameOver && <EventModal game={game} />}
+      <PendingDecision game={game} />
       {game.gameOver && <GameOverModal game={game} />}
     </>
   );
+}
+
+/**
+ * Puts a queued decision in front of the player the way they asked for.
+ *
+ * `modal` and `delegate-minor` still open the dialogue — under delegation the
+ * only things that reach here are the ones the cabinet was not authorised to
+ * take. `inline` renders nothing: the shell's decision banner has it. Under
+ * `delegate-all` nothing ever reaches here at all, and the fallback exists
+ * only for the window between a decision being raised and the next advance
+ * settling it.
+ */
+function PendingDecision({ game }: { game: GameState }) {
+  const mode = useUiStore((s) => s.prefs.eventMode);
+  if (game.eventQueue.length === 0 || game.gameOver) return null;
+  if (mode === 'inline') return null;
+  return <EventModal game={game} />;
 }
 
 function PanelHost({ game, panel }: { game: GameState; panel: ReturnType<typeof useUiStore.getState>['panel'] }) {

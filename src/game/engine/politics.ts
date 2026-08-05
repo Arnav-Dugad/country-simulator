@@ -1,9 +1,13 @@
-import type { FactionId, FactionState, GameState, Policy } from '../types';
+import type { FactionId, FactionState, GameState, LogEntry, Policy } from '../types';
 import { FACTIONS } from '../data/factions';
 import { GOVERNMENT_INDEX } from '../data/definitions';
 import { clamp, debtToGdp, gdpPerCapita } from '../selectors';
+import { explainCapitalIncome, explainLegislativeSupport, explainMandate } from './explain';
+import { coalitionDiscount, isPartner, updateCoalition } from './coalition';
 
 export { factionModifiers } from '../selectors';
+
+type Logger = (entry: Omit<LogEntry, 'id' | 'turn' | 'year' | 'month'>) => void;
 
 /* ------------------------------------------------------------------ */
 /* Political capital                                                   */
@@ -30,21 +34,9 @@ export function capitalCapacity(s: GameState): number {
  * which is why a popular leader with a hostile parliament still cannot govern.
  */
 export function capitalIncome(s: GameState): number {
-  const gov = GOVERNMENT_INDEX[s.identity.government];
-  const approvalTerm = (s.approval - 35) * 0.09;
-  const mandateTerm = (s.governance.mandate - 45) * 0.05;
-  const supportTerm = (s.governance.legislativeSupport - 40) * 0.045;
-  const stabilityTerm = (s.stability - 45) * 0.035;
-  const momentumTerm = s.governance.momentum * 0.02;
-  // Not answering to a legislature is worth something on its own.
-  const structural = gov?.holdsElections ? 1.4 : 2.4;
-  const corruptionDrag = s.corruption * 0.012;
-
-  return clamp(
-    structural + approvalTerm + mandateTerm + supportTerm + stabilityTerm + momentumTerm - corruptionDrag,
-    -4,
-    14,
-  );
+  // Itemised in `explainCapitalIncome`, which the politics panel renders
+  // verbatim — the breakdown the player reads is this calculation.
+  return explainCapitalIncome(s).target;
 }
 
 /** Spends political capital, returning false when there is not enough. */
@@ -103,13 +95,15 @@ export function assessLegislation(s: GameState, policy: Policy): LegislativeAsse
   const base = basePoliticalCost(policy);
 
   // Parties that dislike the policy make it dearer; allies make it cheaper.
+  // A coalition partner votes for the government's programme whether or not
+  // it is their programme — that is what they signed up to.
   let partyLean = 0;
   const totalSupport = s.parties.reduce((sum, p) => sum + p.support, 0) || 100;
   for (const party of s.parties) {
     const appeal = policy.ideologyAppeal?.[party.ideology] ?? 0;
     const weight = party.support / totalSupport;
-    // A party's own willingness blends its ideology with its view of you.
-    partyLean += weight * (appeal * 1.6 + party.relation * 0.22);
+    const loyalty = isPartner(s, party.id) ? 24 : 0;
+    partyLean += weight * (appeal * 1.6 + party.relation * 0.22 + loyalty);
   }
 
   // Factions apply pressure whether or not there is a parliament.
@@ -130,18 +124,23 @@ export function assessLegislation(s: GameState, policy: Policy): LegislativeAsse
     ? clamp(1.9 - support / 60, 0.35, 2.4)
     : clamp(1.5 - support / 90, 0.4, 1.7);
 
-  const cost = Math.round(clamp(base * friction, 2, 160));
+  // A government with a working coalition is not buying votes any more.
+  const discount = coalitionDiscount(s);
+  const cost = Math.round(clamp(base * friction * discount, 2, 160));
   // Nothing is unpassable outright — but at very low support the price is the
   // point. A hard block only happens when the house is actively against you.
   const blocked = gov?.holdsElections === true && support < 12;
 
+  const coalitionNote =
+    discount < 0.99 ? ` The coalition takes ${((1 - discount) * 100).toFixed(0)}% off the price.` : '';
+
   const note = blocked
     ? `The house will not hear it: only ${support.toFixed(0)}% would vote for it.`
     : support >= 60
-      ? `Comfortable majority — ${support.toFixed(0)}% behind it.`
+      ? `Comfortable majority — ${support.toFixed(0)}% behind it.${coalitionNote}`
       : support >= 35
-        ? `Passable, but it will take work: ${support.toFixed(0)}% support.`
-        : `You would be forcing this through on ${support.toFixed(0)}% support.`;
+        ? `Passable, but it will take work: ${support.toFixed(0)}% support.${coalitionNote}`
+        : `You would be forcing this through on ${support.toFixed(0)}% support.${coalitionNote}`;
 
   return { cost, support, blocked, note };
 }
@@ -301,36 +300,17 @@ export function nudgeFactions(
  * Called from `tick` before the political block so approval and stability can
  * respond to a legislature that has stopped cooperating in the same month.
  */
-export function updateGovernance(s: GameState): void {
-  const gov = GOVERNMENT_INDEX[s.identity.government];
+export function updateGovernance(s: GameState, log?: Logger): void {
+  // Coalitions move first: a partner who walks out this month has to be felt
+  // in this month's arithmetic, not next month's.
+  updateCoalition(s, log ?? (() => {}));
 
   /* --- Mandate: how legitimate the government is considered to be ------- */
-  const electoral = gov?.holdsElections
-    ? clamp(40 + (s.parties.find((p) => p.id === `party-${s.leader.ideology}`)?.support ?? 25) * 1.1, 0, 100)
-    : clamp(30 + s.stability * 0.5 + s.approval * 0.2, 0, 100);
-  const mandateTarget = clamp(
-    electoral * 0.45 +
-      s.approval * 0.28 +
-      s.society.civilLiberties * 0.12 +
-      (100 - s.corruption) * 0.15 -
-      s.provinces.filter((p) => p.martialLaw).length * 4,
-    0,
-    100,
-  );
-  s.governance.mandate += (mandateTarget - s.governance.mandate) * 0.09;
+  s.governance.mandate += (explainMandate(s).target - s.governance.mandate) * 0.09;
 
   /* --- Legislative support ---------------------------------------------- */
-  const totalSupport = s.parties.reduce((sum, p) => sum + p.support, 0) || 100;
-  let houseSupport = 0;
-  for (const party of s.parties) {
-    const weight = party.support / totalSupport;
-    const willing = party.id === `party-${s.leader.ideology}` ? 95 : clamp(50 + party.relation * 0.5, 0, 100);
-    houseSupport += weight * willing;
-  }
-  const supportTarget = gov?.holdsElections
-    ? clamp(houseSupport, 0, 100)
-    : clamp(55 + s.stability * 0.3 - s.corruption * 0.15, 0, 100);
-  s.governance.legislativeSupport += (supportTarget - s.governance.legislativeSupport) * 0.14;
+  s.governance.legislativeSupport +=
+    (explainLegislativeSupport(s).target - s.governance.legislativeSupport) * 0.14;
 
   /* --- Momentum decays toward nothing ------------------------------------ */
   s.governance.momentum *= 0.94;

@@ -11,7 +11,7 @@ import type {
 import { RESOURCE_IDS, RESOURCE_INDEX } from '../data/definitions';
 import { averageRelations, clamp, costScale } from '../selectors';
 import { nextRandom, noise, pick, randRange, weightedPick } from './rng';
-import { addTreasury } from './treasury';
+import { addTreasury, spendTreasury } from './treasury';
 
 /**
  * The world outside your borders.
@@ -643,7 +643,11 @@ export function acceptOffer(s: GameState, offerId: string, log: Logger): OfferOu
       if (s.economy.treasury < amount) {
         return { ok: false, message: 'The treasury cannot cover it' };
       }
-      s.economy.treasury -= amount;
+      // Through `spendTreasury` like every other outflow in the engine. The
+      // guard above already means there is nothing to borrow, but a direct
+      // subtraction here is the kind of thing that quietly starts producing a
+      // negative treasury the day somebody relaxes that guard.
+      spendTreasury(s, amount);
       if (offer.kind === 'aid-request') {
         s.society.softPower = clamp(s.society.softPower + 2, 0, 100);
       } else {

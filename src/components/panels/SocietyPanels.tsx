@@ -11,6 +11,7 @@ import {
 } from '../../game/selectors';
 import { hdi } from '../../game/selectors';
 import { Badge, Card, Meter, Reveal, Stat, meterColor } from '../ui/primitives';
+import { Inspect } from '../game/Inspector';
 import { ChartFrame, chartAxis, chartTooltip } from './chartHelpers';
 
 /* ================================= Society ============================== */
@@ -119,21 +120,24 @@ export function SocietyPanel({ game }: { game: GameState }) {
         <Reveal delay={0.16} className="lg:col-span-2">
           <Card title="Social indices" icon="🏛️">
             <div className="grid gap-x-6 gap-y-3.5 sm:grid-cols-2">
-              {[
-                { label: 'Happiness', value: s.happiness },
-                { label: 'Healthcare quality', value: s.health },
-                { label: 'Education quality', value: s.education },
-                { label: 'Civil liberties', value: s.civilLiberties },
-                { label: 'Public safety', value: 100 - s.crime },
-                { label: 'Soft power', value: s.softPower },
-                { label: 'Equality', value: 100 - game.economy.inequality },
-                { label: 'Infrastructure', value: game.infrastructure },
-              ].map((row) => (
+              {([
+                { label: 'Happiness', value: s.happiness, id: 'happiness' },
+                { label: 'Healthcare quality', value: s.health, id: 'health' },
+                { label: 'Education quality', value: s.education, id: 'education' },
+                { label: 'Civil liberties', value: s.civilLiberties, id: 'civilLiberties' },
+                { label: 'Public safety', value: 100 - s.crime, id: 'crime' },
+                { label: 'Soft power', value: s.softPower, id: 'softPower' },
+                { label: 'Equality', value: 100 - game.economy.inequality, id: 'inequality' },
+                { label: 'Infrastructure', value: game.infrastructure, id: 'infrastructure' },
+              ] as const).map((row) => (
                 <div key={row.label}>
-                  <div className="mb-1 flex items-baseline justify-between">
+                  <div className="mb-1 flex items-baseline justify-between gap-1">
                     <span className="text-xs text-slate-300">{row.label}</span>
-                    <span className="num text-xs font-semibold" style={{ color: meterColor(row.value) }}>
-                      {row.value.toFixed(0)}
+                    <span className="flex items-center gap-0.5">
+                      <span className="num text-xs font-semibold" style={{ color: meterColor(row.value) }}>
+                        {row.value.toFixed(0)}
+                      </span>
+                      <Inspect game={game} id={row.id} label={row.label} />
                     </span>
                   </div>
                   <Meter value={row.value} height={4} />
@@ -192,7 +196,12 @@ export function EnvironmentPanel({ game }: { game: GameState }) {
             label="Annual emissions"
             value={`${env.emissions.toFixed(0)} Mt`}
             accent="#ff5c6c"
-            icon={<Wind size={14} />}
+            icon={
+              <span className="flex items-center gap-0.5">
+                <Wind size={14} />
+                <Inspect game={game} id="emissions" label="emissions" />
+              </span>
+            }
             hint="CO₂ equivalent"
           />
           <Stat label="Zero-carbon share" value={`${renewableShare(game).toFixed(0)}%`} accent="#7ee787" />

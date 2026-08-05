@@ -17,6 +17,8 @@ import {
 import { researchCapacity, lockedSlotSources, startableTechs } from './research';
 import { responseAvailability } from './crises';
 import { hostileFactions } from './politics';
+import { assessPact, coalitionShare, hasMajority } from './coalition';
+import { assessSettlement, retaliatingNations, averageForeignTariff } from './tradewar';
 
 /**
  * A single piece of advice from the cabinet.
@@ -57,7 +59,9 @@ export type RecommendationAction =
   | { kind: 'crisis'; crisisId: string; responseId: string; label: string }
   | { kind: 'offer'; offerId: string; accept: boolean; label: string }
   | { kind: 'agenda'; id: string; label: string }
-  | { kind: 'branch'; branch: MilitaryBranch; weight: number; label: string };
+  | { kind: 'branch'; branch: MilitaryBranch; weight: number; label: string }
+  | { kind: 'coalition'; partyId: string; label: string }
+  | { kind: 'settle-trade'; countryId: string; label: string };
 
 /** Generic aide used when the relevant portfolio has nobody in it. */
 const VACANT = {
@@ -623,6 +627,127 @@ export function buildRecommendations(s: GameState, limit = 3): Recommendation[] 
         ? { kind: 'decree', id: 'mobilise-reserves', label: 'Mobilise the reserves' }
         : undefined,
     });
+  }
+
+  /* ----------------------------- Coalition ------------------------------ */
+
+  // A government that cannot pass anything has a route out of it that most
+  // players never think to look for, so the board has to name it explicitly.
+  const inCoalition = s.governance.coalition.length > 0;
+  const breached = s.governance.coalition.filter((p) => p.breached);
+
+  if (breached.length > 0) {
+    const pact = breached[0];
+    const party = s.parties.find((p) => p.id === pact.partyId);
+    const grace = Math.max(0, 4 - pact.breachMonths);
+    push({
+      from: '',
+      id: 'coalition-breach',
+      urgency: 150 + (4 - grace) * 20,
+      severity: 'critical',
+      headline: `${party?.name ?? 'A coalition partner'} is about to walk out`,
+      detail: `The agreement was: ${pact.demand.label.toLowerCase()}. It is not being honoured, and they have given us ${grace} month${grace === 1 ? '' : 's'}. If they leave, we lose their votes and take a mandate and stability hit far larger than the concession would have cost.`,
+      panel: 'politics',
+      action:
+        pact.demand.kind === 'policy' && policyAvailability(s, pact.demand.key).enabled
+          ? { kind: 'policy', id: pact.demand.key, label: `Enact ${POLICY_INDEX[pact.demand.key]?.name ?? 'it'}` }
+          : pact.demand.kind === 'budget'
+            ? {
+                kind: 'budget',
+                dept: pact.demand.key as BudgetDept,
+                level: pact.demand.value ?? 1.3,
+                label: `Fund it at ${((pact.demand.value ?? 1.3) * 100).toFixed(0)}%`,
+              }
+            : pact.demand.kind === 'tax'
+              ? {
+                  kind: 'tax',
+                  key: pact.demand.key as TaxKey,
+                  value: pact.demand.value ?? 0,
+                  label: `Set it to ${pact.demand.value ?? 0}%`,
+                }
+              : undefined,
+    });
+  }
+
+  if (!inCoalition && s.governance.legislativeSupport < 48 && s.turn > 12) {
+    // The cheapest partner that would actually give us a working chamber.
+    const candidates = s.parties
+      .filter((p) => p.id !== `party-${s.leader.ideology}`)
+      .map((p) => ({ party: p, assessment: assessPact(s, p.id) }))
+      .filter((c) => c.assessment.enabled)
+      .sort((a, b) => b.assessment.supportGain / Math.max(1, b.assessment.cost) - a.assessment.supportGain / Math.max(1, a.assessment.cost));
+
+    const best = candidates[0];
+    if (best) {
+      push({
+        from: '',
+        id: 'form-coalition',
+        urgency: 84 + (48 - s.governance.legislativeSupport),
+        severity: 'warning',
+        headline: `The house is at ${s.governance.legislativeSupport.toFixed(0)}% — every bill is costing double`,
+        detail: `We are buying votes we do not have, one bill at a time. ${best.party.name} would sit with us for ${best.assessment.cost} political capital, and their price is: ${best.assessment.demand.label.toLowerCase()}. That is worth about ${best.assessment.supportGain.toFixed(0)} points of support and takes the price off every bill after it.`,
+        panel: 'politics',
+        action: { kind: 'coalition', partyId: best.party.id, label: `Bring in ${best.party.name}` },
+      });
+    }
+  } else if (inCoalition && !hasMajority(s) && s.governance.coalition.length < 3) {
+    const candidates = s.parties
+      .filter((p) => p.id !== `party-${s.leader.ideology}`)
+      .map((p) => ({ party: p, assessment: assessPact(s, p.id) }))
+      .filter((c) => c.assessment.enabled)
+      .sort((a, b) => b.party.support - a.party.support);
+    const best = candidates[0];
+    if (best) {
+      push({
+        from: '',
+        id: 'extend-coalition',
+        urgency: 42,
+        severity: 'opportunity',
+        headline: `The coalition holds ${coalitionShare(s).toFixed(0)}% — short of a majority`,
+        detail: `One more partner would put the government over 50% and take a further quarter off the price of legislation. ${best.party.name} would come in for ${best.assessment.cost} capital: ${best.assessment.demand.label.toLowerCase()}.`,
+        panel: 'politics',
+        action: { kind: 'coalition', partyId: best.party.id, label: `Bring in ${best.party.name}` },
+      });
+    }
+  }
+
+  /* ---------------------------- Trade war ------------------------------- */
+
+  const retaliators = retaliatingNations(s);
+  if (retaliators.length > 0) {
+    const worst = retaliators[0];
+    const settlement = assessSettlement(s, worst.id);
+    const avg = averageForeignTariff(s);
+    push({
+      from: 'adv-foreign',
+      id: 'trade-war',
+      urgency: 96 + avg * 2,
+      severity: retaliators.length > 2 ? 'critical' : 'warning',
+      headline: `${retaliators.length} nation${retaliators.length === 1 ? '' : 's'} now tariff our exports`,
+      detail: `Our own rate is ${s.taxes.tariff.toFixed(0)}%, and the answer is an average ${avg.toFixed(1)}% wall on the way out — which comes straight off the trade balance and off volumes with the partners who impose it. ${worst.name} is the worst at ${worst.tariffOnPlayer.toFixed(0)}%. Cutting our own tariff bleeds the grievance away over a year or two; a settlement buys their tariff off at once and does nothing about the cause.`,
+      panel: 'trade',
+      action: settlement.enabled
+        ? { kind: 'settle-trade', countryId: worst.id, label: `Settle with ${worst.name}` }
+        : s.taxes.tariff > 6
+          ? { kind: 'tax', key: 'tariff', value: Math.max(0, s.taxes.tariff - 6), label: `Cut tariffs to ${Math.max(0, s.taxes.tariff - 6).toFixed(0)}%` }
+          : undefined,
+    });
+  } else if (s.taxes.tariff > 16) {
+    const angriest = [...s.nations]
+      .filter((n) => !n.atWarWithPlayer)
+      .sort((a, b) => (b.tradeGrievance ?? 0) - (a.tradeGrievance ?? 0))[0];
+    if (angriest && (angriest.tradeGrievance ?? 0) > 28) {
+      push({
+        from: 'adv-growth',
+        id: 'trade-grievance',
+        urgency: 62,
+        severity: 'warning',
+        headline: `Our tariffs are ${s.taxes.tariff.toFixed(0)}% and patience is running out`,
+        detail: `${angriest.name} is at ${angriest.tradeGrievance.toFixed(0)} on a scale where 45 is where governments start retaliating. Their exporters are ${((angriest.tradeVolume / Math.max(1, (angriest.gdp * 1000) / 12)) * 100).toFixed(0)}% exposed to us, which is why they are the one who will move first. This is far cheaper to head off than to settle.`,
+        panel: 'trade',
+        action: { kind: 'tax', key: 'tariff', value: Math.max(6, s.taxes.tariff - 5), label: `Cut tariffs to ${Math.max(6, s.taxes.tariff - 5).toFixed(0)}%` },
+      });
+    }
   }
 
   /* ----------------------------- Provinces ------------------------------ */

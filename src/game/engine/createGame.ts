@@ -42,8 +42,9 @@ import { nextRandom, pick, randRange } from './rng';
  * 5 — parallel research, political capital, interest groups, crises, national
  *     agendas, the living world (AI wars, offers, blocs, cycle) and the
  *     sovereign wealth fund.
+ * 6 — coalition governments, crisis chaining and trade retaliation.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /* ------------------------------------------------------------------ */
 /* Province generation                                                 */
@@ -233,6 +234,8 @@ function generateNations(
       bloc: naturalBloc(c),
       threatPerception: clamp(randRange(seedState, 5, 30), 0, 100),
       sanctioningPlayer: false,
+      tariffOnPlayer: 0,
+      tradeGrievance: 0,
     };
   });
 }
@@ -580,6 +583,9 @@ export function createGame(config: SetupConfig, seed = Date.now()): GameState {
       momentum: 0,
       billsPassed: 0,
       billsBlocked: 0,
+      coalition: [],
+      pactsFormed: 0,
+      pactsCollapsed: 0,
     },
     factions: [],
     crises: [],

@@ -18,6 +18,7 @@ import { createGame } from '../game/engine/createGame';
 import { VICTORY_INDEX } from '../game/data/definitions';
 import { tick } from '../game/engine/tick';
 import { resolveEvent } from '../game/engine/events';
+import { delegateQueuedDecisions, type DelegatedDecision } from '../game/engine/delegation';
 import type { TradeTerm } from '../game/engine/trade';
 import type { ActionResult } from '../game/engine/actions';
 import * as actions from '../game/engine/actions';
@@ -132,6 +133,9 @@ interface GameStore {
   setAutoRepayDebt: (enabled: boolean) => ActionResult;
   declareAgenda: (defId: string) => ActionResult;
   abandonAgenda: () => ActionResult;
+  openCoalition: (partyId: string) => ActionResult;
+  endCoalition: (partyId: string) => ActionResult;
+  settleTrade: (countryId: string) => ActionResult;
 
   saveToCloud: (uid: string) => Promise<void>;
   publishScore: (uid: string, displayName: string) => Promise<void>;
@@ -270,11 +274,36 @@ export const useGameStore = create<GameStore>((set, get) => {
       }
 
       const next = clone(current);
+      const mode = useUiStore.getState().prefs.eventMode;
+      const delegated: DelegatedDecision[] = [];
+
       for (let i = 0; i < months; i++) {
-        if (next.gameOver || next.eventQueue.length > 0) break;
+        if (next.gameOver) break;
+        // A queued decision blocks time. When the player has handed routine
+        // matters to their cabinet, settle them here so the month can proceed
+        // rather than stopping the campaign on a customs dispute.
+        delegated.push(...delegateQueuedDecisions(next, mode));
+        if (next.eventQueue.length > 0) break;
         tick(next);
       }
+      // And once more after the last tick, so a situation raised this month is
+      // dealt with now rather than waiting for the next advance.
+      delegated.push(...delegateQueuedDecisions(next, mode));
+
       commit(next);
+
+      // Delegation is never silent: every decision the cabinet took is in the
+      // chronicle, and the player is told about it as it happens.
+      if (delegated.length > 0) {
+        const worst = delegated.find((d) => d.failed) ?? delegated[delegated.length - 1];
+        useUiStore.getState().notify(
+          worst.failed ? 'warning' : 'info',
+          delegated.length === 1 ? 'Your cabinet decided' : `Your cabinet decided ${delegated.length} matters`,
+          delegated.length === 1
+            ? `${worst.title}: ${worst.choiceLabel}${worst.failed ? ' — it backfired.' : '.'}`
+            : `Most recently, ${worst.title}: ${worst.choiceLabel}${worst.failed ? ' — it backfired.' : '.'}`,
+        );
+      }
 
       // In eternal mode an objective is recorded rather than ending the run,
       // so it needs its own moment — otherwise reaching it is invisible.
@@ -306,8 +335,22 @@ export const useGameStore = create<GameStore>((set, get) => {
       const game = get().game;
       if (!game || game.gameOver) return;
       if (playing && game.eventQueue.length > 0) {
-        useUiStore.getState().notify('info', 'Decision required', 'Resolve the situation on your desk first.');
-        return;
+        // The cabinet may be authorised to clear this one, in which case
+        // pressing play should simply work rather than scolding the player.
+        const mode = useUiStore.getState().prefs.eventMode;
+        const next = clone(game);
+        const decided = delegateQueuedDecisions(next, mode);
+        if (next.eventQueue.length > 0) {
+          useUiStore.getState().notify('info', 'Decision required', 'Resolve the situation on your desk first.');
+          return;
+        }
+        commit(next);
+        if (decided.length > 0) {
+          const last = decided[decided.length - 1];
+          useUiStore
+            .getState()
+            .notify('info', 'Your cabinet decided', `${last.title}: ${last.choiceLabel}.`);
+        }
       }
       set({ playing });
       if (playing) startTimer();
@@ -415,6 +458,9 @@ export const useGameStore = create<GameStore>((set, get) => {
 
     declareAgenda: (defId) => get().run((s) => declareAgenda(s, defId)),
     abandonAgenda: () => get().run((s) => abandonAgenda(s)),
+    openCoalition: (partyId) => get().run((s) => actions.openCoalition(s, partyId)),
+    endCoalition: (partyId) => get().run((s) => actions.endCoalition(s, partyId)),
+    settleTrade: (countryId) => get().run((s) => actions.settleTrade(s, countryId)),
 
     saveToCloud: async (uid) => {
       const game = get().game;

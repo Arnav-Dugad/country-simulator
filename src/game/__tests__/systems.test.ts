@@ -460,9 +460,17 @@ describe('crises', () => {
     const approvalBefore = s.approval;
     for (let i = 0; i < totalMonths; i++) updateCrises(s, noop);
 
-    expect(s.crises, 'an ignored crisis must eventually end itself').toHaveLength(0);
+    expect(
+      s.crises.some((c) => c.defId === 'energy-emergency'),
+      'an ignored crisis must eventually end itself',
+    ).toBe(false);
     expect(s.crisisCooldowns['energy-emergency']).toBeDefined();
     expect(s.approval, 'the climax must actually hurt').toBeLessThan(approvalBefore);
+    // Anything still running is a consequence of letting it run its course,
+    // and it has to be able to say so.
+    for (const remaining of s.crises) {
+      expect(remaining.causedBy?.defId, 'only a chained crisis may survive here').toBe('energy-emergency');
+    }
   });
 
   it('is resolved by responding, and each response is single-use', () => {

@@ -1,16 +1,14 @@
 import type { EnergySource, GameState, LogEntry, MilitaryBranch, SectorId } from '../types';
 import { BUILDING_INDEX } from '../data/buildings';
-import { TECH_INDEX } from '../data/technologies';
 import { ACHIEVEMENTS } from '../data/achievements';
 import { RESOURCE_INDEX } from '../data/definitions';
-import { DIFFICULTY_INDEX, GOVERNMENT_INDEX, IDEOLOGY_INDEX, VICTORY_INDEX } from '../data/definitions';
+import { GOVERNMENT_INDEX, IDEOLOGY_INDEX, VICTORY_INDEX } from '../data/definitions';
 import {
   activeTradeVolume,
   baselineDeptSpend,
   clamp,
   computeBudget,
   costScale,
-  energyBalance,
   gdpPerCapita,
   renewableShare,
   totalEnergyProduction,
@@ -19,6 +17,7 @@ import {
 import { computeScore, checkVictory, scoreTitle } from './scoring';
 import { rollEvent } from './events';
 import { updateTradeAgreements } from './trade';
+import { updateTradeWar, foreignTariffDrag } from './tradewar';
 import { nextRandom, noise, randRange } from './rng';
 import { addTreasury, spendTreasury } from './treasury';
 import { advanceResearchProjects, normaliseResearch } from './research';
@@ -27,6 +26,21 @@ import { updateCrises } from './crises';
 import { updateAgenda } from './agenda';
 import { naturalBloc, updateDossiers, updateWorld } from './world';
 import { updateFinance } from './finance';
+import {
+  explainContext,
+  frontierLog,
+  frontierPerCapita,
+  targetFor,
+  type ExplainContext,
+} from './explain';
+
+/**
+ * Every headline index is an exponential approach toward a target, and every
+ * one of those targets now lives in `explain.ts` — itemised term by term, and
+ * read from there by the code below. The inspector the player opens is not a
+ * description of this file; it is the arithmetic this file executes.
+ */
+export { frontierLog, frontierPerCapita };
 
 /** Exponential approach: moves `current` a fraction of the way to `target`. */
 function drift(current: number, target: number, rate: number): number {
@@ -36,15 +50,6 @@ function drift(current: number, target: number, rate: number): number {
 /** Monthly output in millions USD — used all over the engine for scaling. */
 function gdpMonthlyFor(s: GameState): number {
   return (s.economy.gdp * 1000) / 12;
-}
-
-/**
- * Diminishing returns. Stacking twenty growth policies should be better than
- * ten, but not twice as good — without this, modifier stacking compounds into
- * absurdity over a fifty-year campaign.
- */
-function softCap(value: number, cap: number): number {
-  return cap * Math.tanh(value / cap);
 }
 
 function log(s: GameState, entry: Omit<LogEntry, 'id' | 'turn' | 'year' | 'month'>): void {
@@ -64,22 +69,11 @@ function log(s: GameState, entry: Omit<LogEntry, 'id' | 'turn' | 'year' | 'month
 
 /** Monthly research output, before it is divided between the active slots. */
 export function researchOutput(s: GameState, mods: ReturnType<typeof totalModifiers>): number {
-  const pop = s.society.population;
-  const base =
-    Math.pow(pop / 1e6, 0.55) * 0.9 +
-    Math.pow(Math.max(1, s.economy.gdp), 0.5) * 1.1;
-
-  const quality =
-    (0.35 + s.society.education / 145) *
-    (0.55 + s.society.literacy / 220) *
-    (1 - s.corruption / 260) *
-    s.budget.research.level;
-
-  return Math.max(0, base * quality * (1 + mods.research / 100));
+  return targetFor(s, 'research', explainContext(s, mods));
 }
 
-function advanceResearch(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
-  s.research.perMonth = researchOutput(s, mods);
+function advanceResearch(s: GameState, ctx: ExplainContext): void {
+  s.research.perMonth = targetFor(s, 'research', ctx);
   const { completed } = advanceResearchProjects(s, s.research.perMonth);
   for (const tech of completed) {
     log(s, {
@@ -149,105 +143,35 @@ function buildingEnergyDemand(s: GameState): number {
   return total;
 }
 
-/**
- * The log10 of the GDP per capita this country could sustain given its
- * technology, institutions and policy mix. Exported so the economy panel can
- * show the player how much headroom is left.
- *
- * The 4.95 baseline is the current world frontier (~$89,000). Institutions
- * move it by up to two orders of magnitude in either direction, which is the
- * observed spread between the best- and worst-governed countries on earth.
- * The clamp puts a hard ceiling on a fifty-year campaign.
- */
-export function frontierLog(s: GameState, mods: ReturnType<typeof totalModifiers>): number {
-  const institutions =
-    (s.society.education - 82) * 0.011 +
-    (s.infrastructure - 80) * 0.008 +
-    (60 - s.corruption) * 0.01 +
-    (s.stability - 75) * 0.005 +
-    (s.economy.productivity - 130) * 0.0018 +
-    (s.economy.creditRating - 70) * 0.0015 -
-    (s.economy.inequality - 38) * 0.0012;
-
-  // Difficulty moves the ceiling itself, not just the speed of approach.
-  // Scaling convergence alone did almost nothing for a developed economy,
-  // because its convergence term is already near zero — which meant the
-  // difficulty setting barely touched the countries where it mattered most.
-  const difficultyShift = Math.log10(DIFFICULTY_INDEX[s.settings.difficulty].economyMultiplier) * 0.9;
-
-  return clamp(
-    4.95 +
-      s.research.completed.length * 0.013 +
-      softCap(mods.gdpGrowth, 3) * 0.05 +
-      institutions +
-      difficultyShift,
-    2.4,
-    5.9,
-  );
-}
-
-/** The sustainable GDP per capita implied by `frontierLog`, in USD. */
-export function frontierPerCapita(s: GameState): number {
-  return Math.pow(10, frontierLog(s, totalModifiers(s)));
-}
-
-function updateEconomy(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
-  const difficulty = DIFFICULTY_INDEX[s.settings.difficulty];
-  const perCapita = gdpPerCapita(s);
-  const balance = energyBalance(s);
-  const energyPenalty = balance >= 1 ? 0 : (1 - balance) * 9;
-  const warPenalty = s.wars.filter((w) => !w.resolved).length * 1.3;
+function updateEconomy(s: GameState, ctx: ExplainContext): void {
+  const mods = ctx.mods;
 
   // Growth is convergence toward a productivity frontier, not a free-standing
   // rate. Technology, institutions and good policy raise the frontier; the
   // economy then grows fast when far below it and stalls once it arrives.
   // This is what stops a well-played campaign compounding into absurdity.
-  const logPerCapita = Math.log10(Math.max(400, perCapita));
-  const frontier = frontierLog(s, mods);
-  const convergence = clamp((frontier - logPerCapita) * 6, -9, 7.5) * difficulty.economyMultiplier;
-
-  const workingShare = s.society.ageStructure.working;
-  const demographicTerm = (workingShare - 0.62) * 4.5;
-
-  // Cyclical deviations around the trend. The world cycle is the largest
-  // single term a player cannot control, which is the point of having one:
-  // an export-driven economy genuinely does live or die by external demand.
-  const opennessExposure = clamp(activeTradeVolume(s) / Math.max(1, (s.economy.gdp * 1000) / 12), 0, 0.6);
-  const worldTerm = s.world.cycle * (0.6 + opennessExposure * 2.4);
-  const sanctionPenalty = s.nations.filter((n) => n.sanctioningPlayer).length * 0.12;
-
-  const cyclical =
-    (s.economy.confidence - 50) * 0.02 +
-    demographicTerm +
-    worldTerm -
-    sanctionPenalty -
-    Math.max(0, s.economy.inflation - 4) * 0.28 -
-    Math.max(0, s.economy.interestRate - 3) * 0.16 -
-    Math.max(0, s.economy.unemployment - 6) * 0.1 -
-    energyPenalty -
-    warPenalty +
-    noise(s) * 0.7;
-
-  s.economy.growth = clamp(drift(s.economy.growth, convergence + cyclical, 0.3), -20, 15);
+  // Every term is itemised in `explainGrowth`, which is what the player sees.
+  s.economy.growth = clamp(
+    drift(s.economy.growth, targetFor(s, 'growth', ctx) + noise(s) * 0.7, 0.3),
+    -20,
+    15,
+  );
   // `gdp` tracks real output; inflation is modelled separately so the two
   // never get conflated in the UI.
   s.economy.gdp = Math.max(0.5, s.economy.gdp * (1 + s.economy.growth / 100 / 12));
   s.economy.realIndex = Math.max(0.01, s.economy.realIndex * (1 + s.economy.growth / 100 / 12));
 
   // --- Inflation: Phillips curve + deficit monetisation + energy costs ------
-  const budget = computeBudget(s);
+  // GDP has just moved, so the cached budget is stale; recompute it once and
+  // let every later explanation this month reuse it.
+  ctx.budget = computeBudget(s);
+  const budget = ctx.budget;
   const gdpMonthly = (s.economy.gdp * 1000) / 12;
-  const deficitRatio = gdpMonthly > 0 ? -budget.net / gdpMonthly : 0;
-  const targetInflation =
-    2 +
-    mods.inflation +
-    Math.max(0, 5.5 - s.economy.unemployment) * 0.34 +
-    Math.max(0, deficitRatio) * 11 +
-    energyPenalty * 0.55 +
-    (s.corruption - 35) * 0.02 -
-    (s.economy.interestRate - 2.5) * 0.46 +
-    noise(s) * 0.5;
-  s.economy.inflation = clamp(drift(s.economy.inflation, targetInflation, 0.24), -6, 400);
+  s.economy.inflation = clamp(
+    drift(s.economy.inflation, targetFor(s, 'inflation', ctx) + noise(s) * 0.5, 0.24),
+    -6,
+    400,
+  );
 
   // --- Central bank -------------------------------------------------------
   // An independent bank follows a Taylor rule. A captured one does what the
@@ -261,46 +185,28 @@ function updateEconomy(s: GameState, mods: ReturnType<typeof totalModifiers>): v
   s.economy.interestRate = drift(s.economy.interestRate, policyTarget, 0.18);
 
   // --- Unemployment: Okun's law around a structural rate ------------------
-  const structural = clamp(
-    5.4 + mods.unemployment - (s.society.education - 50) * 0.02 + (s.corruption - 35) * 0.02,
-    1.2,
-    40,
+  s.economy.unemployment = clamp(
+    drift(s.economy.unemployment, targetFor(s, 'unemployment', ctx), 0.16),
+    0.4,
+    65,
   );
-  const targetUnemployment = clamp(structural - (s.economy.growth - 2.2) * 0.55, 0.6, 60);
-  s.economy.unemployment = clamp(drift(s.economy.unemployment, targetUnemployment, 0.16), 0.4, 65);
 
   // --- Productivity ------------------------------------------------------
-  const targetProductivity = clamp(
-    60 +
-      s.research.completed.length * 1.9 +
-      s.society.education * 0.42 +
-      s.infrastructure * 0.3 -
-      s.corruption * 0.16,
-    25,
-    280,
-  );
-  s.economy.productivity = drift(s.economy.productivity, targetProductivity, 0.05);
+  s.economy.productivity = drift(s.economy.productivity, targetFor(s, 'productivity', ctx), 0.05);
 
   // --- Confidence --------------------------------------------------------
-  const targetConfidence = clamp(
-    46 +
-      (s.economy.growth - 2) * 5.4 +
-      (s.stability - 50) * 0.34 +
-      (s.approval - 50) * 0.18 -
-      Math.max(0, s.economy.inflation - 3) * 2.4 -
-      s.wars.filter((w) => !w.resolved).length * 8,
-    2,
-    99,
-  );
-  s.economy.confidence = drift(s.economy.confidence, targetConfidence, 0.2);
+  s.economy.confidence = drift(s.economy.confidence, targetFor(s, 'confidence', ctx), 0.2);
 
   // --- Trade ---------------------------------------------------------------
   // Volume is set in updateDiplomacy; the balance is the surplus or deficit
-  // that competitiveness produces on top of it, centred on zero.
+  // that competitiveness produces on top of it, centred on zero. The last
+  // factor is what other governments levy on your goods in return: raise your
+  // own tariffs far enough and the answer arrives as a wall on your exports.
   const competitiveness =
     (s.economy.productivity / 100) *
     (1 + mods.tradeIncome / 100) *
-    (1 - s.taxes.tariff / 260);
+    (1 - s.taxes.tariff / 260) *
+    foreignTariffDrag(s);
   s.economy.tradeBalance = activeTradeVolume(s) * clamp(competitiveness - 1, -0.45, 0.45);
 
   // --- Exchange rate: inflation differential and confidence ---------------
@@ -322,19 +228,7 @@ function updateEconomy(s: GameState, mods: ReturnType<typeof totalModifiers>): v
   s.economy.reserves = Math.max(0, s.economy.reserves + budget.net * 0.06);
 
   // --- Credit rating -------------------------------------------------------
-  const debtRatio = s.economy.gdp > 0 ? (s.economy.debt / s.economy.gdp) * 100 : 0;
-  const targetRating = clamp(
-    96 -
-      debtRatio * 0.34 -
-      Math.max(0, deficitRatio) * 60 -
-      s.corruption * 0.26 +
-      s.stability * 0.2 +
-      (s.economy.growth - 2) * 1.4 -
-      Math.max(0, s.economy.inflation - 5) * 1.1,
-    1,
-    100,
-  );
-  s.economy.creditRating = drift(s.economy.creditRating, targetRating, 0.09);
+  s.economy.creditRating = drift(s.economy.creditRating, targetFor(s, 'creditRating', ctx), 0.09);
 
   // --- Sector rotation -----------------------------------------------------
   const sectorTargets = sectorTargetsFor(s);
@@ -349,18 +243,7 @@ function updateEconomy(s: GameState, mods: ReturnType<typeof totalModifiers>): v
   }
 
   // --- Inequality ----------------------------------------------------------
-  const targetInequality = clamp(
-    38 +
-      mods.inequality +
-      (s.taxes.income < 20 ? 8 : 0) -
-      (s.taxes.wealth * 0.7) -
-      (s.taxes.income - 26) * 0.24 -
-      (s.budget.welfare.level - 1) * 9 +
-      s.corruption * 0.12,
-    8,
-    92,
-  );
-  s.economy.inequality = drift(s.economy.inequality, targetInequality, 0.05);
+  s.economy.inequality = drift(s.economy.inequality, targetFor(s, 'inequality', ctx), 0.05);
 }
 
 function sectorTargetsFor(s: GameState): Record<SectorId, number> {
@@ -381,7 +264,8 @@ function sectorTargetsFor(s: GameState): Record<SectorId, number> {
   return raw;
 }
 
-function updateSociety(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
+function updateSociety(s: GameState, ctx: ExplainContext): void {
+  const mods = ctx.mods;
   const perCapita = gdpPerCapita(s);
   const dev = clamp(Math.log10(Math.max(300, perCapita)), 2.5, 5.2);
 
@@ -389,19 +273,8 @@ function updateSociety(s: GameState, mods: ReturnType<typeof totalModifiers>): v
   // Calibrated so that funding a department at level 1.0 roughly *sustains*
   // the index a country of that development level starts with. Anything below
   // 1.0 is a real cut; anything above it is a real improvement.
-  const healthTarget = clamp(
-    40 + (s.budget.healthcare.level - 1) * 30 + mods.health + dev * 8 - s.corruption * 0.16,
-    2,
-    100,
-  );
-  s.society.health = drift(s.society.health, healthTarget, 0.06);
-
-  const eduTarget = clamp(
-    42 + (s.budget.education.level - 1) * 30 + mods.education + dev * 8 - s.corruption * 0.14,
-    2,
-    100,
-  );
-  s.society.education = drift(s.society.education, eduTarget, 0.05);
+  s.society.health = drift(s.society.health, targetFor(s, 'health', ctx), 0.06);
+  s.society.education = drift(s.society.education, targetFor(s, 'education', ctx), 0.05);
 
   s.society.literacy = clamp(
     drift(s.society.literacy, clamp(30 + s.society.education * 0.72, 20, 99.8), 0.03),
@@ -409,58 +282,10 @@ function updateSociety(s: GameState, mods: ReturnType<typeof totalModifiers>): v
     99.9,
   );
 
-  const crimeTarget = clamp(
-    34 +
-      mods.crime -
-      (s.budget.police.level - 1) * 18 -
-      (s.society.education - 50) * 0.3 -
-      (dev - 3.5) * 6 +
-      (s.economy.unemployment - 6) * 1.5 +
-      (s.economy.inequality - 38) * 0.42 +
-      s.corruption * 0.16,
-    1,
-    100,
-  );
-  s.society.crime = drift(s.society.crime, crimeTarget, 0.07);
-
-  const libertyTarget = clamp(
-    50 + mods.civilLiberties + (s.approval - 50) * 0.08 - s.corruption * 0.1,
-    1,
-    100,
-  );
-  s.society.civilLiberties = drift(s.society.civilLiberties, libertyTarget, 0.06);
-
-  const softPowerTarget = clamp(
-    8 +
-      mods.softPower +
-      Math.log10(Math.max(1, s.economy.gdp)) * 8 +
-      (s.budget.culture.level - 1) * 14 +
-      s.society.civilLiberties * 0.16 +
-      s.research.completed.length * 0.5 -
-      s.wars.filter((w) => !w.resolved).length * 6,
-    1,
-    100,
-  );
-  s.society.softPower = drift(s.society.softPower, softPowerTarget, 0.05);
-
-  const happinessTarget = clamp(
-    30 +
-      mods.happiness +
-      (dev - 3.5) * 4 +
-      (s.society.health - 50) * 0.2 +
-      (s.society.education - 50) * 0.12 +
-      (100 - s.society.crime) * 0.16 +
-      (s.society.civilLiberties - 50) * 0.14 +
-      (s.budget.welfare.level - 1) * 11 +
-      (60 - s.economy.inequality) * 0.24 -
-      Math.max(0, s.economy.unemployment - 5) * 1.3 -
-      Math.max(0, s.economy.inflation - 3) * 1.1 -
-      s.environment.pollution * 0.1 +
-      (s.economy.growth - 1.5) * 1.4,
-    1,
-    100,
-  );
-  s.society.happiness = drift(s.society.happiness, happinessTarget, 0.07);
+  s.society.crime = drift(s.society.crime, targetFor(s, 'crime', ctx), 0.07);
+  s.society.civilLiberties = drift(s.society.civilLiberties, targetFor(s, 'civilLiberties', ctx), 0.06);
+  s.society.softPower = drift(s.society.softPower, targetFor(s, 'softPower', ctx), 0.05);
+  s.society.happiness = drift(s.society.happiness, targetFor(s, 'happiness', ctx), 0.07);
 
   // --- Demography -----------------------------------------------------------
   const birthTarget = clamp(
@@ -523,7 +348,8 @@ function updateSociety(s: GameState, mods: ReturnType<typeof totalModifiers>): v
   );
 }
 
-function updateEnergyAndEnvironment(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
+function updateEnergyAndEnvironment(s: GameState, ctx: ExplainContext): void {
+  const mods = ctx.mods;
   // Demand tracks output and population; efficiency gains pull it back down.
   const efficiency = 1 - clamp(s.research.completed.length * 0.006, 0, 0.35);
   const targetDemand = Math.max(
@@ -553,12 +379,7 @@ function updateEnergyAndEnvironment(s: GameState, mods: ReturnType<typeof totalM
   s.environment.renewableShare = renewableShare(s);
 
   // --- Emissions -------------------------------------------------------------
-  const fossilTWh = fossil.reduce((sum, k) => sum + s.energy.production[k], 0);
-  const targetEmissions = Math.max(
-    0.5,
-    (s.economy.gdp * 0.12 + fossilTWh * 0.42) * (1 + mods.emissions / 100) * (1 - s.taxes.carbon / 190),
-  );
-  s.environment.emissions = drift(s.environment.emissions, targetEmissions, 0.05);
+  s.environment.emissions = drift(s.environment.emissions, targetFor(s, 'emissions', ctx), 0.05);
 
   // A single country only nudges the global figure; the rest is the world's.
   // Baseline warming is ~0.019 °C/yr, plus this nation's share of world emissions.
@@ -566,14 +387,7 @@ function updateEnergyAndEnvironment(s: GameState, mods: ReturnType<typeof totalM
   const share = clamp(s.environment.emissions / worldEmissions, 0, 0.4);
   s.environment.globalTemp = clamp(s.environment.globalTemp + (0.019 + share * 0.05) / 12, 0, 6);
 
-  const pollutionTarget = clamp(
-    s.environment.emissions / Math.max(1, s.economy.gdp) * 60 +
-      (1 - s.budget.environment.level) * 22 +
-      (100 - s.environment.renewableShare) * 0.18,
-    1,
-    100,
-  );
-  s.environment.pollution = drift(s.environment.pollution, pollutionTarget, 0.05);
+  s.environment.pollution = drift(s.environment.pollution, targetFor(s, 'pollution', ctx), 0.05);
 
   s.environment.forestCover = clamp(
     drift(
@@ -639,31 +453,15 @@ function updateResources(s: GameState): void {
   }
 }
 
-function updateMilitary(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
+function updateMilitary(s: GameState, ctx: ExplainContext): void {
+  const mods = ctx.mods;
   const funding = s.budget.military.level;
-  const techBonus = s.research.completed.filter((t) => TECH_INDEX[t]?.branch === 'military').length * 3.4;
 
   // Military power tracks *absolute* defence spending, not the budget ratio.
   // A superpower spending 1% of a $27T economy fields something Fiji cannot
   // match at 100% of its own. The log scale means doubling the defence budget
   // is a real but not overwhelming gain (~+6.6 points).
-  const annualDefenceMillions = Math.max(
-    0.5,
-    baselineDeptSpend(s).military * funding * 12,
-  );
-  const spendPower = (Math.log10(annualDefenceMillions) - 2.2) * 22;
-
-  const targetStrength = clamp(
-    18 +
-      spendPower +
-      techBonus +
-      mods.militaryPower * 0.5 +
-      s.military.veterancy * 0.15 -
-      s.corruption * 0.14,
-    1,
-    100,
-  );
-  s.military.strength = drift(s.military.strength, targetStrength, 0.05);
+  s.military.strength = drift(s.military.strength, targetFor(s, 'militaryStrength', ctx), 0.05);
 
   const branchTarget = s.military.strength;
   const doctrineBias: Record<GameState['military']['doctrine'], Partial<Record<MilitaryBranch, number>>> = {
@@ -809,7 +607,8 @@ function updateMilitary(s: GameState, mods: ReturnType<typeof totalModifiers>): 
   s.intelligence.activeOps = stillRunning;
 }
 
-function updateDiplomacy(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
+function updateDiplomacy(s: GameState, ctx: ExplainContext): void {
+  const mods = ctx.mods;
   const openGov = ['democracy', 'republic', 'federal-republic', 'constitutional-monarchy', 'direct-democracy'];
   const playerOpen = openGov.includes(s.identity.government);
   const playerBloc = naturalBloc({
@@ -864,7 +663,10 @@ function updateDiplomacy(s: GameState, mods: ReturnType<typeof totalModifiers>):
     if (n.atWarWithPlayer || n.sanctioned || n.sanctioningPlayer) return 0;
     const proximity = n.region === s.identity.region ? 1.8 : 1;
     const sameBloc = n.bloc === playerBloc ? 1.25 : 1;
-    return Math.max(0, n.gdp) * proximity * sameBloc * (0.35 + (n.relations + 100) / 260);
+    // A counter-tariff is a real reduction in what flows between you, not just
+    // a price signal — this is where a trade war shows up in the ledger.
+    const barrier = clamp(1 - (n.tariffOnPlayer ?? 0) / 70, 0.35, 1);
+    return Math.max(0, n.gdp) * proximity * sameBloc * barrier * (0.35 + (n.relations + 100) / 260);
   });
   const weightTotal = weights.reduce((a, b) => a + b, 0);
   s.nations.forEach((n, i) => {
@@ -939,67 +741,11 @@ function updateWars(s: GameState): void {
   }
 }
 
-function updatePolitics(s: GameState, mods: ReturnType<typeof totalModifiers>): void {
-  const activeWars = s.wars.filter((w) => !w.resolved);
-  const losingWar = activeWars.some((w) => w.warScore < -30);
-
-  const approvalTarget = clamp(
-    44 +
-      mods.approval +
-      (s.economy.growth - 2) * 3.4 -
-      Math.max(0, s.economy.unemployment - 5) * 1.7 -
-      Math.max(0, s.economy.inflation - 3) * 2.1 +
-      (s.society.happiness - 50) * 0.36 -
-      (s.corruption - 30) * 0.24 +
-      (s.stability - 50) * 0.12 +
-      (s.society.health - 50) * 0.08 -
-      (losingWar ? 14 : 0) +
-      (activeWars.length > 0 && !losingWar ? 4 : 0),
-    0,
-    100,
-  );
-  s.approval = clamp(drift(s.approval, approvalTarget, 0.12) + noise(s) * 0.35, 0, 100);
-
-  const avgUnrest = s.provinces.reduce((sum, p) => sum + p.unrest, 0) / Math.max(1, s.provinces.length);
-  const stabilityTarget = clamp(
-    48 +
-      mods.stability +
-      (s.approval - 50) * 0.3 +
-      (s.society.happiness - 50) * 0.2 -
-      (s.corruption - 30) * 0.2 -
-      Math.max(0, s.economy.unemployment - 7) * 1.2 -
-      (s.economy.inequality - 40) * 0.16 -
-      avgUnrest * 0.22 +
-      (s.budget.police.level - 1) * 8 -
-      activeWars.length * 5,
-    0,
-    100,
-  );
-  s.stability = clamp(drift(s.stability, stabilityTarget, 0.1), 0, 100);
-
-  const corruptionTarget = clamp(
-    36 +
-      mods.corruption -
-      (s.society.education - 50) * 0.16 -
-      (s.society.civilLiberties - 50) * 0.12 +
-      (100 - s.stability) * 0.14 -
-      (s.budget.police.level - 1) * 5,
-    0,
-    100,
-  );
-  s.corruption = clamp(drift(s.corruption, corruptionTarget, 0.05), 0, 100);
-
-  const devLevel = Math.log10(Math.max(300, gdpPerCapita(s)));
-  const infraTarget = clamp(
-    44 +
-      (s.budget.infrastructure.level - 1) * 32 +
-      mods.infrastructure +
-      (devLevel - 3.5) * 6 -
-      s.corruption * 0.16,
-    1,
-    100,
-  );
-  s.infrastructure = drift(s.infrastructure, infraTarget, 0.05);
+function updatePolitics(s: GameState, ctx: ExplainContext): void {
+  s.approval = clamp(drift(s.approval, targetFor(s, 'approval', ctx), 0.12) + noise(s) * 0.35, 0, 100);
+  s.stability = clamp(drift(s.stability, targetFor(s, 'stability', ctx), 0.1), 0, 100);
+  s.corruption = clamp(drift(s.corruption, targetFor(s, 'corruption', ctx), 0.05), 0, 100);
+  s.infrastructure = drift(s.infrastructure, targetFor(s, 'infrastructure', ctx), 0.05);
 
   // --- Provinces ------------------------------------------------------------
   const provinceInvestment = s.provinces.reduce((sum, p) => sum + Math.max(0, p.investment), 0);
@@ -1051,7 +797,11 @@ function updatePolitics(s: GameState, mods: ReturnType<typeof totalModifiers>): 
       investmentBoost * 0.02;
     p.separatism = clamp(p.separatism + pressure, 0, 100);
 
-    p.population *= 1 + (s.society.birthRate - s.society.deathRate) / 1000 / 12;
+    // Migration counts here as well as births and deaths. Leaving it out meant
+    // the provinces drifted out of step with the national figure over a long
+    // campaign, in exactly the countries where migration matters most.
+    p.population *=
+      1 + (s.society.birthRate - s.society.deathRate + s.society.netMigration) / 1000 / 12;
   }
 
   const occupied = s.provinces.filter((p) => p.martialLaw).length;
@@ -1306,26 +1056,29 @@ export function tick(s: GameState): GameState {
 
   normaliseResearch(s);
 
-  const mods = totalModifiers(s);
+  // One working set for the whole month: the modifier bundle is expensive to
+  // build and every target below reads from it.
+  const ctx = explainContext(s);
   const logger = (entry: Omit<LogEntry, 'id' | 'turn' | 'year' | 'month'>) => log(s, entry);
 
   // The world moves first, so the domestic economy reacts to the cycle and to
   // any war that broke out this month rather than to last month's world.
   updateWorld(s, logger);
 
-  advanceResearch(s, mods);
+  advanceResearch(s, ctx);
   advanceConstruction(s);
-  updateEconomy(s, mods);
+  updateEconomy(s, ctx);
   updateFinance(s);
-  updateSociety(s, mods);
-  updateEnergyAndEnvironment(s, mods);
+  updateSociety(s, ctx);
+  updateEnergyAndEnvironment(s, ctx);
   updateResources(s);
-  updateMilitary(s, mods);
+  updateMilitary(s, ctx);
   updateDossiers(s);
-  updateDiplomacy(s, mods);
+  updateDiplomacy(s, ctx);
+  updateTradeWar(s, logger);
   updateWars(s);
-  updateGovernance(s);
-  updatePolitics(s, mods);
+  updateGovernance(s, logger);
+  updatePolitics(s, ctx);
   updateCrises(s, logger);
   updateAgenda(s, logger);
   updateModifiers(s);

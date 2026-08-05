@@ -86,6 +86,18 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { gdpShock: -4.2, approval: -7.2, stability: -5.5, unemployment: 1.8 },
+    chains: [
+      {
+        crisisId: 'debt-crisis',
+        chance: 0.45,
+        because: 'The rescue was paid for with borrowed money, and the market has noticed.',
+      },
+      {
+        crisisId: 'legitimacy-crisis',
+        chance: 0.3,
+        because: 'Nobody has been prosecuted, and everybody knows who was made whole.',
+      },
+    ],
   },
   {
     id: 'inflation-spiral',
@@ -149,6 +161,13 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { inflation: 11, gdpShock: -3.6, approval: -8.4, stability: -4.95 },
+    chains: [
+      {
+        crisisId: 'legitimacy-crisis',
+        chance: 0.35,
+        because: 'Wages have not moved in two years. The street has drawn its own conclusion.',
+      },
+    ],
   },
   {
     id: 'debt-crisis',
@@ -211,6 +230,13 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { gdpShock: -5.4, approval: -9.6, stability: -6.6 },
+    chains: [
+      {
+        crisisId: 'banking-crisis',
+        chance: 0.4,
+        because: 'The banks were holding the paper. The write-down went straight through their capital.',
+      },
+    ],
   },
 
   /* ------------------------------- Political ------------------------------ */
@@ -277,6 +303,18 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { approval: -10.8, stability: -12.1, civilLiberties: -5.6, gdpShock: -2.4 },
+    chains: [
+      {
+        crisisId: 'insurgency',
+        chance: 0.28,
+        because: 'The people who stopped believing in the ballot did not all go home.',
+      },
+      {
+        crisisId: 'secession-movement',
+        chance: 0.24,
+        because: 'If the centre has no claim to govern, the provinces will make their own.',
+      },
+    ],
   },
   {
     id: 'corruption-scandal',
@@ -339,6 +377,13 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { approval: -8.4, corruption: 4.8, stability: -4.4, softPower: -7 },
+    chains: [
+      {
+        crisisId: 'legitimacy-crisis',
+        chance: 0.42,
+        because: 'It was never about the one minister, and the cover-up proved it.',
+      },
+    ],
   },
   {
     id: 'secession-movement',
@@ -401,6 +446,13 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { stability: -11, gdpShock: -3.6, approval: -6, softPower: -8.4 },
+    chains: [
+      {
+        crisisId: 'insurgency',
+        chance: 0.3,
+        because: 'A political movement denied a political route acquires an armed wing.',
+      },
+    ],
   },
 
   /* -------------------------------- Health -------------------------------- */
@@ -464,6 +516,13 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { population: -540000, health: -8.4, happiness: -7.2, gdpShock: -3, approval: -6 },
+    chains: [
+      {
+        crisisId: 'debt-crisis',
+        chance: 0.32,
+        because: 'The emergency was financed at any price. The bill has now arrived.',
+      },
+    ],
   },
 
   /* ----------------------------- Environmental ---------------------------- */
@@ -528,6 +587,18 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { happiness: -9.6, health: -7.2, stability: -7.7, population: -144000 },
+    chains: [
+      {
+        crisisId: 'epidemic',
+        chance: 0.34,
+        because: 'Untreated water and displaced people are how a waterborne outbreak begins.',
+      },
+      {
+        crisisId: 'insurgency',
+        chance: 0.2,
+        because: 'Where the wells fail, whoever controls the water controls the district.',
+      },
+    ],
   },
   {
     id: 'energy-emergency',
@@ -588,6 +659,13 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { gdpShock: -3.6, approval: -7.2, stability: -5.5, happiness: -6 },
+    chains: [
+      {
+        crisisId: 'inflation-spiral',
+        chance: 0.4,
+        because: 'Energy is an input to everything, and everything has repriced.',
+      },
+    ],
   },
 
   /* ------------------------------- Security ------------------------------- */
@@ -656,6 +734,13 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { stability: -12.1, approval: -7.2, population: -192000, gdpShock: -4.2 },
+    chains: [
+      {
+        crisisId: 'secession-movement',
+        chance: 0.3,
+        because: 'Territory held for three years starts calling itself a country.',
+      },
+    ],
   },
 
   /* -------------------------------- Social -------------------------------- */
@@ -723,6 +808,13 @@ export const CRISES: CrisisDef[] = [
       },
     ],
     climax: { research: -12, education: -6, health: -6, gdpShock: -2.4 },
+    chains: [
+      {
+        crisisId: 'legitimacy-crisis',
+        chance: 0.18,
+        because: 'A country whose professionals have left is not governed by consent so much as by inertia.',
+      },
+    ],
   },
 ];
 

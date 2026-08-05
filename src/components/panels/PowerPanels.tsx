@@ -13,7 +13,8 @@ import { averageRelations, formatBillions, formatMoney, formatNumber, formatPopu
 import { COVERT_OPS, orgEligibility } from '../../game/engine/actions';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
-import { Badge, Button, Card, EmptyState, Meter, Modal, Reveal, Slider, Stat, Tabs, Tooltip, meterColor } from '../ui/primitives';
+import { Inspect } from '../game/Inspector';
+import { Badge, Button, ConfirmButton, Card, EmptyState, Meter, Modal, Reveal, Slider, Stat, Tabs, Tooltip, meterColor } from '../ui/primitives';
 import { Flag } from '../ui/Flag';
 import { ModifierList } from './ModifierList';
 import { WorldMap, type MapMode } from './WorldMap';
@@ -48,7 +49,17 @@ export function MilitaryPanel({ game }: { game: GameState }) {
     <div className="space-y-5">
       <Reveal>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label="Military strength" value={m.strength.toFixed(0)} accent="#ff5c6c" icon={<Swords size={14} />} />
+          <Stat
+            label="Military strength"
+            value={m.strength.toFixed(0)}
+            accent="#ff5c6c"
+            icon={
+              <span className="flex items-center gap-0.5">
+                <Swords size={14} />
+                <Inspect game={game} id="militaryStrength" label="military strength" />
+              </span>
+            }
+          />
           <Stat label="Active personnel" value={formatPopulation(m.manpower)} accent="#4f8cff" hint={`${formatPopulation(m.reserves)} reserves`} />
           <Stat label="Readiness" value={m.readiness.toFixed(0)} accent="#7ee787" hint={`Morale ${m.morale.toFixed(0)}`} />
           <Stat
@@ -450,6 +461,7 @@ function OfferInbox({ game }: { game: GameState }) {
 export function DiplomacyPanel({ game }: { game: GameState }) {
   const store = useGameStore();
   const { selectedNation, selectNation } = useUiStore();
+  const confirmRisky = useUiStore((s) => s.prefs.confirmRisky);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<'map' | 'nations' | 'treaties' | 'orgs'>('map');
   const [mapMode, setMapMode] = useState<MapMode>('relations');
@@ -587,9 +599,28 @@ export function DiplomacyPanel({ game }: { game: GameState }) {
                       </dd>
                     </div>
                   </dl>
-                  <Button size="sm" variant="ghost" full className="mt-3" onClick={() => store.cancelTreaty(treaty.id)}>
+                  <ConfirmButton
+                    size="sm"
+                    variant="ghost"
+                    full
+                    className="mt-3"
+                    needsConfirmation={confirmRisky}
+                    confirm={{
+                      title: `Withdraw from the ${treaty.type} treaty?`,
+                      danger: true,
+                      confirmLabel: 'Withdraw',
+                      body: (
+                        <>
+                          Tearing up a treaty costs 18 points of relations and 20 of trust with the other party, and
+                          trust is far slower to rebuild than relations. They will also be harder to sign anything
+                          with for years afterwards.
+                        </>
+                      ),
+                    }}
+                    onConfirm={() => store.cancelTreaty(treaty.id)}
+                  >
                     Withdraw
-                  </Button>
+                  </ConfirmButton>
                 </Card>
               );
             })}

@@ -715,6 +715,193 @@ describe('trade panel', () => {
   });
 });
 
+/* ================================================================== */
+/* Coalition, trade disputes, the inspector and delegated decisions     */
+/* ================================================================== */
+
+describe('coalition government', () => {
+  it('offers a pact with each rival party and names their price', () => {
+    const game = createGame(setupFor('germany'), 77);
+    game.governance.capital = 300;
+    useGameStore.setState({ game, playing: false });
+
+    const { container } = render(<PoliticsPanel game={game} />);
+    expect(container.textContent).toMatch(/floor of the house/i);
+    // Every rival is on offer, with the concession stated in the same card.
+    for (const party of game.parties.filter((p) => p.id !== `party-${game.leader.ideology}`)) {
+      expect(screen.getAllByText(new RegExp(party.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length)
+        .toBeGreaterThan(0);
+    }
+    expect(container.textContent).toMatch(/capital/i);
+    expectNoReactErrors('coalition offers');
+  });
+
+  it('forms a coalition through the store and then shows it as government', async () => {
+    const user = userEvent.setup();
+    const game = createGame(setupFor('germany'), 78);
+    game.governance.capital = 400;
+    useGameStore.setState({ game, playing: false });
+
+    const { rerender } = render(<PoliticsPanel game={game} />);
+    const offer = screen.getAllByRole('button', { name: /Bring .* into government/i })[0];
+    await user.click(offer);
+
+    const next = useGameStore.getState().game!;
+    expect(next.governance.coalition.length).toBe(1);
+
+    rerender(<PoliticsPanel game={next} />);
+    expect(screen.getByText(/In government with you/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Dismiss from government/i })).toBeTruthy();
+    expectNoReactErrors('coalition formed');
+  });
+
+  it('tells a government with no legislature that there is nothing to bargain with', () => {
+    const game = createGame(setupFor('saudi-arabia', { government: 'absolute-monarchy' }), 79);
+    useGameStore.setState({ game, playing: false });
+    const { container } = render(<PoliticsPanel game={game} />);
+    expect(container.textContent).toMatch(/no legislature|does not answer to a chamber/i);
+    expectNoReactErrors('coalition without a chamber');
+  });
+});
+
+describe('trade disputes', () => {
+  it('shows who is retaliating, why, and what it costs', async () => {
+    const user = userEvent.setup();
+    const game = matureGame();
+    game.taxes.tariff = 32;
+    game.governance.capital = 200;
+    const angry = game.nations[0];
+    angry.tradeGrievance = 78;
+    angry.tariffOnPlayer = 18;
+    useGameStore.setState({ game, playing: false });
+
+    render(<TradePanel game={game} />);
+    // The headline warning names the scale of it.
+    expect(screen.getByText(/Trade war/i)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Disputes/i }));
+    expect(screen.getAllByText(/Export competitiveness/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(new RegExp(angry.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length)
+      .toBeGreaterThan(0);
+    // And offers the way out, for every partner it can be offered to.
+    expect(screen.getAllByRole('button', { name: /Settle for \d+ capital/i }).length).toBeGreaterThan(0);
+    expectNoReactErrors('trade disputes');
+  });
+
+  it('says plainly when there is no dispute at all', async () => {
+    const user = userEvent.setup();
+    const game = matureGame();
+    for (const n of game.nations) {
+      n.tradeGrievance = 0;
+      n.tariffOnPlayer = 0;
+    }
+    useGameStore.setState({ game, playing: false });
+
+    render(<TradePanel game={game} />);
+    await user.click(screen.getByRole('button', { name: /Disputes/i }));
+    expect(screen.getByText(/No trade disputes/i)).toBeTruthy();
+    expectNoReactErrors('no trade disputes');
+  });
+});
+
+describe('the "why is this number" inspector', () => {
+  it('opens the engine\'s own arithmetic for an index and itemises it', async () => {
+    const user = userEvent.setup();
+    const game = matureGame();
+    useGameStore.setState({ game, playing: false });
+
+    render(<EconomyPanel game={game} />);
+    await user.click(screen.getByRole('button', { name: /Why is inflation this number/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Terms — these add up/i)).toBeTruthy();
+    expect(within(dialog).getByText(/^Total$/)).toBeTruthy();
+    // The three headline pieces: where it is, where it is going, and the rate.
+    expect(within(dialog).getByText(/^Now$/)).toBeTruthy();
+    expect(within(dialog).getByText(/Heading for/i)).toBeTruthy();
+    expectNoReactErrors('inspector');
+  });
+
+  it('is removed entirely when the player turns it off', () => {
+    const game = matureGame();
+    useGameStore.setState({ game, playing: false });
+    useUiStore.getState().setPref('showInspector', false);
+
+    render(<EconomyPanel game={game} />);
+    expect(screen.queryByRole('button', { name: /Why is .* this number/i })).toBeNull();
+
+    useUiStore.getState().setPref('showInspector', true);
+    expectNoReactErrors('inspector disabled');
+  });
+});
+
+describe('decision presentation', () => {
+  function queuedGame(): GameState {
+    const game = createGame(setupFor('germany'), 1234);
+    const def = Object.values(EVENT_INDEX).find((d) => d.severity === 'major')!;
+    game.eventQueue = [{ defId: def.id, turn: game.turn }];
+    return game;
+  }
+
+  it('marks the cabinet\'s own pick in the dialogue and can take it in one click', async () => {
+    const user = userEvent.setup();
+    const game = queuedGame();
+    useGameStore.setState({ game, playing: false });
+
+    render(<EventModal game={game} />);
+    expect(screen.getAllByText(/Cabinet's pick/i).length).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: /Let the cabinet decide/i }));
+    expect(useGameStore.getState().game!.eventQueue).toHaveLength(0);
+    expectNoReactErrors('cabinet pick');
+  });
+
+  it('docks the decision into a banner instead of a dialogue when asked to', () => {
+    const game = queuedGame();
+    useGameStore.setState({ game, playing: false });
+    useUiStore.getState().setPref('eventMode', 'inline');
+
+    const { container } = render(
+      <MemoryRouter>
+        <GameShell game={game}>
+          <div>panel</div>
+        </GameShell>
+      </MemoryRouter>,
+    );
+
+    // The top bar and the banner both flag it, which is the point.
+    expect(screen.getAllByText(/Decision required/i).length).toBeGreaterThan(0);
+    // Nothing is covering the screen: the panel underneath is still there.
+    expect(container.textContent).toContain('panel');
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    useUiStore.getState().setPref('eventMode', 'modal');
+    expectNoReactErrors('inline decision');
+  });
+
+  it('settles a routine decision without ever showing it, and says so', () => {
+    const game = createGame(setupFor('germany'), 4242);
+    const minor = Object.values(EVENT_INDEX).find((d) => d.severity === 'minor')!;
+    game.eventQueue = [{ defId: minor.id, turn: game.turn }];
+    useGameStore.setState({ game, playing: false });
+    useUiStore.getState().setPref('eventMode', 'delegate-all');
+
+    act(() => {
+      useGameStore.getState().advance(1);
+    });
+
+    const next = useGameStore.getState().game!;
+    expect(next.eventQueue).toHaveLength(0);
+    expect(next.turn).toBeGreaterThan(game.turn);
+    // Delegation is never silent.
+    const toasts = useUiStore.getState().toasts;
+    expect(toasts.some((t) => /cabinet decided/i.test(t.title))).toBe(true);
+    expect(next.log.some((entry) => entry.text.includes(minor.title))).toBe(true);
+
+    useUiStore.getState().setPref('eventMode', 'modal');
+  });
+});
+
 describe('executive actions panel', () => {
   it('enacts a decree through the store and puts it on cooldown', async () => {
     const user = userEvent.setup();

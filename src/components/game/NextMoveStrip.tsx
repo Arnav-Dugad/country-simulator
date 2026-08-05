@@ -160,6 +160,8 @@ export function useRecommendationRunner() {
         break;
       case 'agenda': store.declareAgenda(action.id); break;
       case 'branch': store.setBranchFunding(action.branch, action.weight); break;
+      case 'coalition': store.openCoalition(action.partyId); break;
+      case 'settle-trade': store.settleTrade(action.countryId); break;
     }
   };
 }

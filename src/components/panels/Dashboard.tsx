@@ -22,6 +22,7 @@ import { Badge, Card, CountUp, Meter, Reveal, Stat, Tooltip, meterColor } from '
 import { useUiStore } from '../../store/uiStore';
 import { ChartFrame, chartAxis, chartTooltip } from './chartHelpers';
 import { AdvisoryBoard } from './AdvisoryBoard';
+import { Inspect } from '../game/Inspector';
 import { WorldMap } from './WorldMap';
 
 export function Dashboard({ game }: { game: GameState }) {
@@ -90,7 +91,12 @@ export function Dashboard({ game }: { game: GameState }) {
             value={formatBillions(game.economy.gdp, game.identity.currency.symbol)}
             delta={game.economy.growth}
             hint={`Real growth, annualised`}
-            icon={game.economy.growth >= 0 ? <TrendingUp size={14} className="text-aurora-lime" /> : <TrendingDown size={14} className="text-aurora-red" />}
+            icon={
+              <span className="flex items-center gap-0.5">
+                {game.economy.growth >= 0 ? <TrendingUp size={14} className="text-aurora-lime" /> : <TrendingDown size={14} className="text-aurora-red" />}
+                <Inspect game={game} id="growth" label="growth" />
+              </span>
+            }
             accent="#f5d073"
           />
           <Stat
@@ -125,14 +131,24 @@ export function Dashboard({ game }: { game: GameState }) {
             label="Political capital"
             value={Math.floor(game.governance.capital)}
             hint={`${game.governance.capitalPerMonth >= 0 ? '+' : ''}${game.governance.capitalPerMonth.toFixed(1)} per month`}
-            icon={<Landmark size={14} />}
+            icon={
+              <span className="flex items-center gap-0.5">
+                <Landmark size={14} />
+                <Inspect game={game} id="capitalIncome" label="political capital income" />
+              </span>
+            }
             accent="#9d6bff"
           />
           <Stat
             label="Research"
             value={`${game.research.active.length} / ${researchCapacity(game)}`}
             hint={`${Math.round(game.research.perMonth)} points per month`}
-            icon={<FlaskConical size={14} />}
+            icon={
+              <span className="flex items-center gap-0.5">
+                <FlaskConical size={14} />
+                <Inspect game={game} id="research" label="research output" />
+              </span>
+            }
             accent="#3ddbd9"
           />
           <Stat

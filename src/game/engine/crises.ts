@@ -101,6 +101,11 @@ export function updateCrises(s: GameState, log: Logger): void {
           tone: 'critical',
           icon: '💀',
         });
+        // Consequences of neglect: a crisis nobody contained is how the next
+        // one starts. Rolled here rather than anywhere else in the lifecycle
+        // precisely so that a crisis the player *did* bring under control can
+        // never chain — a chain is always a price, never bad luck.
+        spawnChained(s, def, surviving, log);
         continue;
       }
     }
@@ -156,6 +161,63 @@ export function updateCrises(s: GameState, log: Logger): void {
  */
 function responseDecay(crisis: ActiveCrisis): number {
   return crisis.responsesUsed.length * 2.4;
+}
+
+/**
+ * Rolls a crisis's declared chains after it has run its full course.
+ *
+ * Three guards keep this from becoming a death spiral, which is the obvious
+ * failure mode of any cascade system:
+ *
+ *  - At most one chain fires per climax, however many are declared.
+ *  - Nothing chains past the concurrent-crisis limit, and nothing chains onto
+ *    a crisis already running or still inside its cooldown.
+ *  - A chained crisis begins at low severity with its stage clock reset, so it
+ *    arrives as a warning the player has time to answer rather than as an
+ *    emergency that was already half over when it appeared.
+ *
+ * The trigger predicate is *not* consulted: the parent crisis is the cause, so
+ * requiring the usual preconditions as well would mean the most causally
+ * obvious chains almost never fired.
+ */
+function spawnChained(
+  s: GameState,
+  parent: CrisisDef,
+  surviving: ActiveCrisis[],
+  log: Logger,
+): void {
+  if (!parent.chains || parent.chains.length === 0) return;
+  if (surviving.length >= MAX_CONCURRENT_CRISES) return;
+
+  for (const chain of parent.chains) {
+    const def = CRISIS_INDEX[chain.crisisId];
+    if (!def) continue;
+    if (surviving.some((c) => c.defId === def.id)) continue;
+    const last = s.crisisCooldowns[def.id];
+    if (last !== undefined && s.turn - last < def.cooldown) continue;
+
+    const difficulty = DIFFICULTY_INDEX[s.settings.difficulty];
+    if (nextRandom(s) > clamp(chain.chance * difficulty.crisisMultiplier, 0, 0.7)) continue;
+
+    surviving.push({
+      id: `crisis-${def.id}-${s.turn}-${Math.floor(nextRandom(s) * 1e5).toString(36)}`,
+      defId: def.id,
+      startedTurn: s.turn,
+      stage: 0,
+      monthsInStage: 0,
+      // Deliberately below the 38–70 band a spontaneous crisis opens at.
+      severity: clamp(26 + difficulty.crisisMultiplier * 6, 18, 50),
+      responsesUsed: [],
+      causedBy: { defId: parent.id, because: chain.because },
+    });
+    log({
+      text: `${def.name} has broken out in the wake of ${parent.name}. ${chain.because}`,
+      category: 'crisis',
+      tone: 'critical',
+      icon: def.icon,
+    });
+    return; // one consequence per climax, whatever else was declared
+  }
 }
 
 /* ------------------------------------------------------------------ */

@@ -8,6 +8,8 @@ import { POLICIES } from '../../game/data/policies';
 import { TECHNOLOGIES } from '../../game/data/technologies';
 import { BUILDINGS } from '../../game/data/buildings';
 import { DECREES } from '../../game/data/decrees';
+import { assessPact } from '../../game/engine/coalition';
+import { assessSettlement, retaliatingNations } from '../../game/engine/tradewar';
 import { useUiStore, type PanelId } from '../../store/uiStore';
 import { useGameStore } from '../../store/gameStore';
 
@@ -127,6 +129,38 @@ export function CommandPalette({ game }: { game: GameState }) {
       });
     }
 
+    // Coalition partners. Only the parties that would actually come in, since
+    // an offer nobody would accept is noise rather than a command.
+    for (const party of game.parties) {
+      const pact = assessPact(game, party.id);
+      if (!pact.enabled) continue;
+      out.push({
+        id: `coalition-${party.id}`,
+        label: `Bring ${party.name} into government`,
+        hint: `${pact.cost} capital · ${pact.demand.label}`,
+        group: 'Coalition',
+        icon: '🤝',
+        keywords: `coalition pact partner votes legislature ${party.ideology} ${pact.demand.label}`,
+        run: () => store.openCoalition(party.id),
+      });
+    }
+
+    // Live trade disputes, so a wall of foreign tariffs is one keystroke away
+    // from being negotiated down rather than buried three tabs deep.
+    for (const nation of retaliatingNations(game)) {
+      const settlement = assessSettlement(game, nation.id);
+      if (!settlement.enabled) continue;
+      out.push({
+        id: `settle-${nation.id}`,
+        label: `Settle the trade dispute with ${nation.name}`,
+        hint: `${settlement.cost} capital · lifts their ${settlement.theirTariff.toFixed(0)}% tariff`,
+        group: 'Trade disputes',
+        icon: '🕊️',
+        keywords: 'trade war tariff retaliation settlement dispute',
+        run: () => store.settleTrade(nation.id),
+      });
+    }
+
     return out;
   }, [game, setPanel, store]);
 
@@ -185,7 +219,7 @@ export function CommandPalette({ game }: { game: GameState }) {
   return (
     <AnimatePresence>
       <motion.div
-        className="fixed inset-0 z-[60] flex items-start justify-center px-4 pt-[12vh]"
+        className="fixed inset-0 z-[60] flex items-start justify-center px-3 pt-[6vh] sm:px-4 sm:pt-[12vh]"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -197,7 +231,7 @@ export function CommandPalette({ game }: { game: GameState }) {
           role="dialog"
           aria-modal="true"
           aria-label="Command palette"
-          className="glass-strong relative flex max-h-[70vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl"
+          className="glass-strong relative flex max-h-[82dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl sm:max-h-[70vh]"
           initial={{ opacity: 0, y: -12, scale: 0.985 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -8, scale: 0.99 }}
@@ -258,9 +292,14 @@ export function CommandPalette({ game }: { game: GameState }) {
                       )}
                     >
                       <span className="w-5 shrink-0 text-center text-sm">{command.icon}</span>
-                      <span className="min-w-0 flex-1 truncate text-xs font-medium">{command.label}</span>
-                      <span className="shrink-0 truncate text-[10px] text-slate-500">{command.hint}</span>
-                      {i === cursor && <CornerDownLeft size={12} className="shrink-0 text-gold-400" />}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium">{command.label}</span>
+                        {/* On a phone the hint moves under the label rather
+                            than being squeezed off the right-hand edge. */}
+                        <span className="block truncate text-[10px] text-slate-500 sm:hidden">{command.hint}</span>
+                      </span>
+                      <span className="hidden shrink-0 truncate text-[10px] text-slate-500 sm:block">{command.hint}</span>
+                      {i === cursor && <CornerDownLeft size={12} className="hidden shrink-0 text-gold-400 sm:block" />}
                     </button>
                   </div>
                 );
@@ -269,16 +308,14 @@ export function CommandPalette({ game }: { game: GameState }) {
           </div>
 
           <div className="flex items-center gap-4 border-t border-white/10 px-4 py-2 text-[10px] text-slate-600">
-            <span>
+            <span className="hidden sm:inline">
               <kbd className="rounded bg-white/[0.07] px-1">↑</kbd>
               <kbd className="ml-0.5 rounded bg-white/[0.07] px-1">↓</kbd> navigate
             </span>
-            <span>
+            <span className="hidden sm:inline">
               <kbd className="rounded bg-white/[0.07] px-1">↵</kbd> run
             </span>
-            <span className="ml-auto">
-              Actions that are not currently possible will say why.
-            </span>
+            <span className="sm:ml-auto">Actions that are not currently possible will say why.</span>
           </div>
         </motion.div>
       </motion.div>

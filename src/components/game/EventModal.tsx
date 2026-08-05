@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, ChevronRight, Dices } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Dices, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
 import type { EventChoice, GameState } from '../../game/types';
 import { EVENT_INDEX } from '../../game/data/events';
 import { costScale, formatMoney } from '../../game/selectors';
 import { choiceAvailable } from '../../game/engine/events';
+import { recommendChoice } from '../../game/engine/delegation';
 import { useGameStore } from '../../store/gameStore';
 import { Badge, Button, Modal, Tooltip } from '../ui/primitives';
 import { ModifierList } from '../panels/ModifierList';
@@ -27,6 +28,14 @@ export function EventModal({ game }: { game: GameState }) {
   const scale = useMemo(() => costScale(game.economy.gdp), [game.economy.gdp]);
   const symbol = game.identity.currency.symbol;
 
+  // What a competent cabinet would do — the same scoring the delegation
+  // setting uses, surfaced here so the recommendation is available to
+  // everyone rather than only to players who hand the decision over.
+  const recommended = useMemo(
+    () => (pending ? recommendChoice(game, pending.defId) : null),
+    [game, pending],
+  );
+
   if (!def) return null;
   const severity = SEVERITY[def.severity] ?? SEVERITY.minor;
 
@@ -44,6 +53,18 @@ export function EventModal({ game }: { game: GameState }) {
         </span>
       }
       subtitle={<span className="capitalize">{def.category} · this decision cannot be deferred</span>}
+      footer={
+        recommended ? (
+          <Button
+            variant="secondary"
+            full
+            icon={<Sparkles size={14} />}
+            onClick={() => chooseEventOption(recommended.id)}
+          >
+            Let the cabinet decide — {recommended.label}
+          </Button>
+        ) : undefined
+      }
     >
       <div className="space-y-5">
         <p className="text-sm leading-relaxed text-slate-300">{def.description}</p>
@@ -57,6 +78,7 @@ export function EventModal({ game }: { game: GameState }) {
               game={game}
               scale={scale}
               symbol={symbol}
+              recommended={recommended?.id === choice.id}
               expanded={expanded === choice.id}
               onToggle={() => setExpanded(expanded === choice.id ? null : choice.id)}
               onSelect={() => chooseEventOption(choice.id)}
@@ -69,13 +91,14 @@ export function EventModal({ game }: { game: GameState }) {
 }
 
 function ChoiceRow({
-  choice, index, game, scale, symbol, expanded, onToggle, onSelect,
+  choice, index, game, scale, symbol, recommended, expanded, onToggle, onSelect,
 }: {
   choice: EventChoice;
   index: number;
   game: GameState;
   scale: number;
   symbol: string;
+  recommended: boolean;
   expanded: boolean;
   onToggle: () => void;
   onSelect: () => void;
@@ -90,15 +113,26 @@ function ChoiceRow({
       transition={{ delay: index * 0.06, duration: 0.3 }}
       className={clsx(
         'rounded-xl border transition',
-        availability.enabled
-          ? 'border-white/12 bg-white/[0.03] hover:border-gold-500/40'
-          : 'border-white/[0.07] bg-white/[0.015] opacity-60',
+        recommended
+          ? 'border-gold-500/45 bg-gold-500/[0.06]'
+          : availability.enabled
+            ? 'border-white/12 bg-white/[0.03] hover:border-gold-500/40'
+            : 'border-white/[0.07] bg-white/[0.015] opacity-60',
       )}
     >
       <div className="p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <h4 className="text-sm font-semibold text-white">{choice.label}</h4>
+            <h4 className="flex flex-wrap items-center gap-2 text-sm font-semibold text-white">
+              {choice.label}
+              {recommended && (
+                <Tooltip label="Your cabinet weighs each option's real effects against what the country needs right now. This is what they would do.">
+                  <Badge tone="gold">
+                    <Sparkles size={9} /> Cabinet's pick
+                  </Badge>
+                </Tooltip>
+              )}
+            </h4>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">{choice.description}</p>
           </div>
           {choice.riskChance !== undefined && (

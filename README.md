@@ -156,15 +156,59 @@ one country can chase Superpower, then Carbon Negative, then Utopia in a single 
   peace negotiation; six covert operation types, and **per-nation intelligence dossiers**
   that decide whether you see a rival's real strength or a stable — possibly wrong —
   estimate.
+- **Coalition government** — The legislature can be *negotiated with*, not only paid.
+  Every rival party wants one specific thing the government is not currently doing —
+  a flagship policy, a budget line held above a level, a tax rate, devolution — derived
+  from its ideology and the live state, so the ask is always something you can go and
+  do. Pay its price in political capital and its seats vote with you for four years,
+  which takes up to a quarter off the cost of every bill after it. Three rules keep it a
+  decision rather than an upgrade: the concession is a *standing* commitment and a
+  partner who stops getting it warns you, then walks out at a cost far larger than the
+  concession; partners take credit, so their support grows at your party's expense; and
+  pacts expire into a fresh negotiation at a fresh price.
+- **Crisis chaining** — A crisis allowed to run its full course can touch off the next
+  one. A banking collapse nobody contained becomes a debt crisis or a crisis of
+  legitimacy; a water crisis becomes an epidemic; an insurgency becomes a secession
+  movement. Chains fire **only at the climax**, so a crisis you brought under control
+  never chains — a chain is always the price of neglect and never bad luck. At most one
+  fires per climax, it starts below the severity a spontaneous crisis opens at, and it
+  says in the panel exactly which crisis caused it and why.
+- **Trade retaliation** — Tariffs invite an answer. Every nation carries a running
+  grievance built from your rate, weighted by how exposed its exporters actually are to
+  you, and past a threshold it imposes a counter-tariff of its own — which comes off
+  your export competitiveness and off the volume you do with it. It is slow, so a
+  temporary tariff does not start a war; proportionate, so nobody retaliates far beyond
+  what you levy; reversible, because cutting your rate bleeds the grievance away; and it
+  has character, because a mercantile state retaliates hard and an isolationist one
+  barely notices. There is also a diplomatic exit: a settlement bought with political
+  capital lifts their tariff at once and does nothing at all about the cause.
 - **Events** — 56 branching situations with 2–3 choices each. Risky options can
   backfire, and a stable, low-corruption state with good intelligence gambles better.
+  How they reach you is a setting: a dialogue that stops the game, a banner docked into
+  whatever panel you are on, or your cabinet settling the routine ones — or all of them —
+  on your behalf. Delegated decisions are never silent; every one is announced and
+  written into the chronicle.
+- **"Why is this number this?"** — Every headline index carries a question mark that
+  opens the engine's own arithmetic for it: every term, what it contributes, the sum,
+  the bounds, how fast the value is closing on it, and which terms are holding it back.
+  This is not a description of the simulation — `explain.ts` *owns* every target and
+  `tick` reads them from there, so what you read is literally the calculation being run
+  on your country, and a test asserts that one month of simulation moves each metric by
+  exactly the stated fraction of the stated gap.
 - **Quality of life** — A **command palette** (`Ctrl`/`Cmd`+`K`) that searches every
-  ministry and every technology, policy, building and executive action, and runs it;
-  **keyboard shortcuts** for time, navigation and rewind (`?` for the sheet);
-  **pinnable panels**; a **one-month rewind** holding the last twelve months in memory
-  (disabled under ironman, never written to a save); filters and search on every long
-  list; affordability and political cost shown before you commit; and a preferences
-  panel for motion, confirmations and which advice surfaces are shown.
+  ministry and every technology, policy, building, executive action, coalition offer and
+  trade dispute, and runs it; **keyboard shortcuts** for time, navigation and rewind
+  (`?` for the sheet); **pinnable panels** and a searchable ministry drawer; a
+  **one-month rewind** holding the last twelve months in memory (disabled under ironman,
+  never written to a save); filters and search on every long list; affordability and
+  political cost shown before you commit; confirmation on anything irreversible; and
+  exact rather than compact figures for anyone who would rather read `$1,240,000M`.
+- **On a phone** — A bottom navigation bar putting the four most-used ministries and the
+  advance button under your thumb, rendered only at the widths where it is visible so it
+  never duplicates the top bar's controls in the accessibility tree. Dialogues are
+  bottom sheets sized to the visible viewport with safe-area padding. Tooltips — which
+  carry a third of the game's explanatory text — open on long-press instead of being
+  unreachable without a mouse.
 - **Scoring** — Eight capped pillars — governance now weighs mandate, coalition health
   and whether you govern by consent or by martial law; longevity credits plans delivered
   and crises contained — 60 achievements across four tiers, seven victory conditions (all
@@ -236,19 +280,46 @@ a dead band either side of neutral. Keyed too low, the system had every country
 on earth quietly alienating half its establishment before the player had done
 anything at all.
 
+**8. A cliff edge is worth more than the step toward it.**
+The cabinet that settles delegated decisions works by *projection*: it applies
+each option to a cheap model of the country's vitals and values the resulting
+state, pricing the distance to every loss condition and every crisis trigger.
+A first version scored the raw deltas instead — so many points per point of
+approval, so many per million spent — and delegated its way to a 30% survival
+rate against 93% for blindly taking the first option every time. This
+simulation punishes *levels*, not changes: a credit rating of 44 opens a
+banking crisis, inflation of 13 opens a wage spiral, and each then compounds
+for years. A delta-scorer cannot see a cliff; it only sees that the step was
+small.
+
+**9. Money can be borrowed. A technology cannot.**
+The same cabinet was then filtering its options through the affordability
+check the UI uses — so the moment a country's cash dipped it was locked out of
+exactly the expensive, responsible responses this game rewards and forced onto
+the cheap ones it punishes. That single line cost 57 points of survival.
+Non-financial requirements are real gates and it respects them; a bill larger
+than this month's balance is not, and the projection prices the borrowing.
+
 The result, measured across 15 sample countries over 600 months (`survival-probe`
-runs 8 seeds each, because a single-seed comparison is meaningless once a change
-shifts the RNG stream):
+takes a seed count, because a single-seed comparison is meaningless once a change
+shifts the RNG stream — and at 180 runs even the aggregate carries ±3 points of
+stream noise, which is why the numbers below are quoted at 450):
 
 | Play style | Outcome |
 | --- | --- |
-| Never touch anything, always take the first option | 88% survive across 120 runs; stagnant economies, scores 6k–11k |
+| Never touch anything, always take the first option | 86% survive across 450 runs; stagnant economies, scores 6k–11k |
+| Hand every decision to your cabinet | **100%** survive across 40 country-seed pairs, mean score 9.1k — ahead of always taking the authored first option (93%, 8.8k), and far ahead of picking at random (15%) or by cost (3%) |
 | Take the top cabinet recommendation every month and fill the cabinet | No losses. Several countries reach their victory objective the month it becomes eligible — the United States wins at month 120 on 90% approval, 100 stability and zero debt |
 | Keep the budget near balance, keep researching, enact affordable policies | 15/15 survive or win; $16k–$415k GDP per capita, scores 11.7k–15.0k |
 
-The middle row is the one that matters: following the game's own advice is a
-winning strategy, and a test asserts it. If the advice were not survivable the
+The middle two rows are the ones that matter: following the game's own advice is
+a winning strategy, and tests assert both. If the advice were not survivable the
 advice would be wrong.
+
+Crisis chaining was measured the same way, and against a control that rolls the
+dice on every climax but never spawns anything: chained and unchained runs score
+identically, so the cascade is a narrative consequence of neglect rather than a
+difficulty increase.
 
 ---
 
@@ -280,9 +351,17 @@ node scripts/trajectory-probe.mjs usa # month-by-month index trajectory
 node scripts/difficulty-probe.mjs     # does the difficulty setting actually bite?
 node scripts/military-probe.mjs       # military calibration against real countries
 node scripts/content-count.mjs        # size of every content set
-node scripts/survival-probe.mjs       # hands-off survival across many seeds
-node scripts/systems-probe.mjs usa    # schema-5 subsystems month by month
+node scripts/survival-probe.mjs 30    # hands-off survival, N seeds per country
+node scripts/systems-probe.mjs usa    # subsystems month by month
+node scripts/strategy-probe.mjs       # every decision strategy, head to head
+node scripts/delegation-probe.mjs     # delegated vs manual play, run by run
 ```
+
+`strategy-probe` is the one to reach for after touching anything the cabinet
+reads. It plays the full 8-country x 5-seed grid under six different decision
+rules — always first, always last, cheapest, affordable-cheapest, random, and
+the cabinet — and prints survival and mean score for each. Every claim about
+delegated play in this document came out of it.
 
 **The game runs fine with no configuration at all.** Without Firebase it falls back to
 offline play: campaigns save to `localStorage`, and sign-in, cloud saves and the
@@ -349,7 +428,7 @@ Skip step 3 and the deployment still works — it just runs in offline mode.
 
 ## Testing and QA
 
-123 tests, all passing, in three suites:
+247 tests, all passing, in five suites:
 
 **`src/game/__tests__/data-integrity.test.ts`** (28) — ids are unique; every tech
 prerequisite resolves and sits at a lower tier; the tech tree has no cycles and is fully
@@ -364,11 +443,30 @@ stays in range; sector shares and party support always sum correctly; time canno
 advance while an event is pending; the whole tech tree completes; every policy and
 building is reachable; taxes, bonds, treaties, orgs, covert ops and war all resolve.
 
-**`src/test/ui-smoke.test.tsx`** (44) — mounts the real React tree in jsdom: every one of
-the 19 panels against a mature campaign, a brand-new campaign and a custom nation; every
+**`src/game/__tests__/systems.test.ts`** (64) — parallel research: unlocks, the queue,
+priority splitting, spillover, rushing and the slot-loss path; political capital and
+legislative friction; interest-group targets and the coup conditions; crisis lifecycle,
+escalation, climax and response gating; the world cycle, foreign wars, offers and
+intel-gated strength estimates; the sovereign fund and central-bank capture; five-year
+plans; the schema-5 migration, including that it is idempotent; and two balance guards
+that pin both hands-off survival and competent play.
+
+**`src/game/__tests__/coalition.test.ts`** (46) — coalition demands, pricing, formation,
+breach, grace period, walkout, expiry and the support transfer; crisis chains, that a
+contained crisis never chains, and that a badly-run century cannot cascade into
+permanent emergency; trade grievance, exposure weighting, proportionate retaliation,
+de-escalation and settlement; the delegation scorer and the guarantee that it beats the
+authored primary response; and the schema-6 migration. It also carries the load-bearing
+test of the inspector: for every metric it explains, one month of simulation moves the
+value by exactly the stated fraction of the stated gap — so if anyone ever reintroduces
+a private copy of a formula inside `tick`, this fails.
+
+**`src/test/ui-smoke.test.tsx`** (58) — mounts the real React tree in jsdom: every one of
+the 22 panels against a mature campaign, a brand-new campaign and a custom nation; every
 one of the 56 events in the event modal; the victory and defeat screens; the full
-wizard flow end-to-end producing a config that actually creates a playable game; and all
-three standalone pages. Any React error logged during a render fails the test.
+wizard flow end-to-end producing a config that actually creates a playable game; the
+coalition, trade-dispute, inspector and decision-presentation surfaces; and all three
+standalone pages. Any React error logged during a render fails the test.
 
 ---
 

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { PanelTarget } from '../game/types';
 import type { Preferences } from '../game/storage';
 import { readPreferences, writePreferences } from '../game/storage';
+import { setCompactNumbers } from '../game/format';
 
 export type ToastKind = 'success' | 'warning' | 'danger' | 'info';
 
@@ -46,11 +47,16 @@ interface UiState {
 
 let toastSeq = 0;
 
+const initialPrefs = readPreferences();
+// The formatting layer keeps its own copy so every `formatMoney` call site
+// picks the preference up without threading it through their signatures.
+setCompactNumbers(initialPrefs.compactNumbers);
+
 export const useUiStore = create<UiState>((set, get) => ({
   panel: 'dashboard',
   recentPanels: [],
   toasts: [],
-  prefs: readPreferences(),
+  prefs: initialPrefs,
   sidebarOpen: false,
   selectedNation: null,
   paletteOpen: false,
@@ -73,6 +79,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   setPref: (key, value) => {
     const prefs = { ...get().prefs, [key]: value };
     writePreferences(prefs);
+    if (key === 'compactNumbers') setCompactNumbers(Boolean(value));
     set({ prefs });
   },
 
